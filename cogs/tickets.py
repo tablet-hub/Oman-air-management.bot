@@ -862,5 +862,8 @@ async def setup(bot):
 
     await bot.add_cog(cog)
 
+    # Register persistent ticket views
     bot.add_view(TicketPanel(cog))
     bot.add_view(TicketControls(cog))
+
+    print("Oman Air ticket views registered successfully.")
