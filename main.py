@@ -66,14 +66,15 @@ class UserIdModal(discord.ui.Modal):
     def __init__(self, action):
         super().__init__(title=f"{action.title()} ticket member")
         self.action = action
-        self.user_id = discord.ui.TextInput(label="Discord user ID", placeholder="Enter the member's numeric ID", max_length=25)
+        self.user_id = discord.ui.TextInput(label="Mention the member", placeholder="@Member or paste their mention", max_length=100)
         self.add_item(self.user_id)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not await require_staff(interaction):
             return
         try:
-            member_id = int(str(self.user_id.value).strip())
+            mention = str(self.user_id.value).strip()
+            member_id = int(mention.replace("<@", "").replace(">", "").replace("!", ""))
             member = interaction.guild.get_member(member_id) or await interaction.guild.fetch_member(member_id)
         except (ValueError, discord.NotFound, discord.HTTPException):
             return await interaction.response.send_message("I couldn't find that member in this server. Check the ID.", ephemeral=True)
@@ -93,14 +94,15 @@ class StaffIdModal(discord.ui.Modal):
     def __init__(self, action):
         super().__init__(title=f"{action.title()} ticket staff")
         self.action = action
-        self.user_id = discord.ui.TextInput(label="Staff member Discord ID", placeholder="Enter numeric member ID", max_length=25)
+        self.user_id = discord.ui.TextInput(label="Mention the staff member", placeholder="@Staff member or paste their mention", max_length=100)
         self.add_item(self.user_id)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not await require_staff(interaction):
             return
         try:
-            staff_id = int(str(self.user_id.value).strip())
+            mention = str(self.user_id.value).strip()
+            staff_id = int(mention.replace("<@", "").replace(">", "").replace("!", ""))
             member = interaction.guild.get_member(staff_id) or await interaction.guild.fetch_member(staff_id)
         except (ValueError, discord.NotFound, discord.HTTPException):
             return await interaction.response.send_message("I couldn't find that member in this server.", ephemeral=True)
@@ -126,10 +128,7 @@ class CloseReasonModal(discord.ui.Modal):
         update_ticket(interaction.guild.id, interaction.channel_id, "close_reason", reason)
         embed = discord.Embed(title="🔒 Ticket Closed", description=f"Closed by {interaction.user.mention}\n**Reason:** {reason}", color=discord.Color.red())
         await interaction.response.send_message(embed=embed)
-        try:
-            await interaction.channel.edit(name=f"closed-{interaction.channel.name}"[:100])
-        except discord.HTTPException:
-            log.exception("Could not rename closed ticket")
+        await interaction.channel.delete(reason=f"Ticket closed by {interaction.user} | Reason: {reason}")
 
 class StaffReplyModal(discord.ui.Modal):
     def __init__(self):
@@ -196,6 +195,9 @@ class TicketStaffTools(discord.ui.View):
         current = record.get("priority", "Normal")
         next_level = levels[(levels.index(current) + 1) % len(levels)] if current in levels else "Normal"
         update_ticket(interaction.guild.id, interaction.channel_id, "priority", next_level)
+        channel_name = interaction.channel.name
+        base_name = channel_name.rsplit("-", 1)[0] if channel_name.rsplit("-", 1)[-1].lower() in ["low", "normal", "high", "urgent"] else channel_name
+        await interaction.channel.edit(name=f"{base_name}-{next_level.lower()}"[:100])
         button.label = f"Priority: {next_level}"
         button.style = discord.ButtonStyle.danger if next_level == "Urgent" else (discord.ButtonStyle.primary if next_level == "High" else discord.ButtonStyle.secondary)
         await interaction.response.edit_message(view=self)
@@ -279,13 +281,8 @@ class TicketControls(discord.ui.View):
             return await interaction.response.send_message("Only the ticket owner or support staff can close this ticket.", ephemeral=True)
         update_ticket(interaction.guild.id, interaction.channel_id, "status", "closed")
         update_ticket(interaction.guild.id, interaction.channel_id, "close_reason", "Closed by ticket owner")
-        await interaction.response.send_message("Ticket closed.")
-        try:
-            await interaction.channel.edit(name=f"closed-{interaction.channel.name}"[:100])
-            if not is_staff:
-                await interaction.channel.set_permissions(interaction.user, send_messages=False)
-        except discord.HTTPException:
-            log.exception("Could not update closed ticket channel")
+        await interaction.response.send_message("Ticket closed. This channel will be deleted shortly.")
+        await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
 
 @bot.tree.command(name="ticketsetup", description="Configure the support ticket system")
 @app_commands.default_permissions(administrator=True)
