@@ -252,8 +252,8 @@ class PriorityView(discord.ui.View):
         self.add_item(PrioritySelect(cog))
 
 
-class TicketControls(discord.ui.View):
-
+    
+        class TicketControls(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=None)
         self.cog = cog
@@ -264,128 +264,109 @@ class TicketControls(discord.ui.View):
         style=discord.ButtonStyle.success,
         custom_id="oman_ticket_claim"
     )
-    async def claim(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Only authorized staff can claim tickets.",
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can claim tickets.",
                 ephemeral=True
             )
-            return
 
         record = self.cog.get_ticket(interaction.channel.id)
 
         if record is None:
-            await interaction.response.send_message(
+            return await interaction.response.send_message(
                 "Ticket record not found.",
                 ephemeral=True
             )
-            return
 
         if record.get("claimed_by"):
-            await interaction.response.send_message(
-                "This ticket is already claimed.",
+            return await interaction.response.send_message(
+                "This ticket has already been claimed.",
                 ephemeral=True
             )
-            return
 
-        record["claimed_by"] = interaction.user.id
+        record["claimed_by"] = str(interaction.user.id)
         record["updated_at"] = current_time()
-
         self.cog.save()
 
         embed = make_embed(
             "Ticket Claimed",
-            f"This ticket is now handled by {interaction.user.mention}."
+            f"This ticket has been claimed by {interaction.user.mention}.",
+            GOLD
         )
 
-        await interaction.response.send_message(
-            embed=embed
-        )
+        await interaction.response.send_message(embed=embed)
 
     @discord.ui.button(
         label="Unclaim",
-        emoji="↩️",
+        emoji="🔓",
         style=discord.ButtonStyle.secondary,
         custom_id="oman_ticket_unclaim"
     )
-    async def unclaim(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Staff only.",
+    async def unclaim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can unclaim tickets.",
                 ephemeral=True
             )
-            return
 
         record = self.cog.get_ticket(interaction.channel.id)
 
         if record is None:
-            await interaction.response.send_message(
+            return await interaction.response.send_message(
                 "Ticket record not found.",
                 ephemeral=True
             )
-            return
 
         record["claimed_by"] = None
         record["updated_at"] = current_time()
-
         self.cog.save()
 
-        await interaction.response.send_message(
-            embed=make_embed(
-                "Ticket Unclaimed",
-                "This ticket is now available for another staff member."
-            )
+        embed = make_embed(
+            "Ticket Unclaimed",
+            f"{interaction.user.mention} has unclaimed this ticket.",
+            BLUE
         )
 
-     @discord.ui.button(
+        await interaction.response.send_message(embed=embed)
+
+    @discord.ui.button(
         label="Assign",
         emoji="👤",
         style=discord.ButtonStyle.primary,
         custom_id="oman_ticket_assign"
     )
-    async def assign(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Staff only.",
+    async def assign(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can assign tickets.",
                 ephemeral=True
             )
-            return
 
         await interaction.response.send_message(
-            "Select the staff member:",
+            "Select the staff member to assign this ticket to:",
             view=AssignTicketView(self.cog),
             ephemeral=True
         )
-       @discord.ui.button(
+
+    @discord.ui.button(
         label="Transfer",
         emoji="🔄",
         style=discord.ButtonStyle.primary,
         custom_id="oman_ticket_transfer"
     )
-    async def transfer(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Staff only.",
+    async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can transfer tickets.",
                 ephemeral=True
             )
-            return
 
         await interaction.response.send_message(
             "Select the staff member to transfer this ticket to:",
             view=AssignTicketView(self.cog),
             ephemeral=True
         )
-            return
-
-     await interaction.response.send_message(
-    "Select the staff member to assign this ticket to:",
-    view=AssignTicketView(self.cog),
-    ephemeral=True
-)
 
     @discord.ui.button(
         label="Priority",
@@ -393,18 +374,16 @@ class TicketControls(discord.ui.View):
         style=discord.ButtonStyle.secondary,
         custom_id="oman_ticket_priority_button"
     )
-    async def priority(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Staff only.",
+    async def priority(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can change ticket priority.",
                 ephemeral=True
             )
-            return
 
         await interaction.response.send_message(
             "Choose the ticket priority:",
-            view=PriorityView(self.cog),
+            view=PriorityView(),
             ephemeral=True
         )
 
@@ -414,17 +393,17 @@ class TicketControls(discord.ui.View):
         style=discord.ButtonStyle.secondary,
         custom_id="oman_ticket_add_member"
     )
-    async def add_member(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Staff only.",
+    async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can add members.",
                 ephemeral=True
             )
-            return
 
-        await interaction.response.send_modal(
-            AddMemberModal(self.cog)
+        await interaction.response.send_message(
+            "Select the member to add:",
+            view=TicketMemberView(self.cog, remove=False),
+            ephemeral=True
         )
 
     @discord.ui.button(
@@ -433,15 +412,17 @@ class TicketControls(discord.ui.View):
         style=discord.ButtonStyle.secondary,
         custom_id="oman_ticket_remove_member"
     )
-          await interaction.response.send_message(
+    async def remove_member(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can remove members.",
+                ephemeral=True
+            )
+
+        await interaction.response.send_message(
             "Select the member to remove:",
             view=TicketMemberView(self.cog, remove=True),
             ephemeral=True
-        )
-            return
-
-        await interaction.response.send_modal(
-            AddMemberModal(self.cog, remove=True)
         )
 
     @discord.ui.button(
@@ -450,18 +431,14 @@ class TicketControls(discord.ui.View):
         style=discord.ButtonStyle.danger,
         custom_id="oman_ticket_close"
     )
-    async def close(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Staff only.",
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.cog.is_staff(interaction.user):
+            return await interaction.response.send_message(
+                "Only staff can close tickets.",
                 ephemeral=True
             )
-            return
 
-        await interaction.response.send_modal(
-            CloseTicketModal(self.cog)
-        )
+        await interaction.response.send_modal(CloseTicketModal(self.cog))
 
 
 class TicketPanel(discord.ui.View):
