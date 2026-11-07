@@ -106,13 +106,11 @@ class AssignTicketView(discord.ui.View):
         await self.cog.assign_ticket(interaction, member)
 class AddMemberModal(discord.ui.Modal, title="Add Member to Ticket"):
 
-    member_id = discord.ui.TextInput(
-        label="Member Discord ID",
-        placeholder="Enter the member's Discord ID",
-        required=True,
-        max_length=20
-    )
-
+           await interaction.response.send_message(
+            "Select the member to add:",
+            view=TicketMemberView(self.cog),
+            ephemeral=True
+        )
     def __init__(self, cog, remove=False):
         super().__init__()
         self.cog = cog
