@@ -150,7 +150,7 @@ class TicketStaffTools(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Claim", emoji="🙋", style=discord.ButtonStyle.success, custom_id="oman_staff_claim")
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.success, custom_id="oman_staff_claim")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         record = ticket_record(interaction.guild.id, interaction.channel_id)
@@ -159,7 +159,7 @@ class TicketStaffTools(discord.ui.View):
         update_ticket(interaction.guild.id, interaction.channel_id, "claimed_by", interaction.user.id)
         await interaction.response.send_message(f"{interaction.user.mention} claimed this ticket.")
         
-    @discord.ui.button(label="Unclaim", emoji="↩️", style=discord.ButtonStyle.secondary, custom_id="oman_staff_unclaim")
+    @discord.ui.button(label="Unclaim", style=discord.ButtonStyle.secondary, custom_id="oman_staff_unclaim")
     async def unclaim(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         record = ticket_record(interaction.guild.id, interaction.channel_id)
@@ -168,27 +168,27 @@ class TicketStaffTools(discord.ui.View):
         update_ticket(interaction.guild.id, interaction.channel_id, "claimed_by", None)
         await interaction.response.send_message(f"Ticket unclaimed by {interaction.user.mention}.")
 
-    @discord.ui.button(label="Assign", emoji="👤", style=discord.ButtonStyle.primary, custom_id="oman_staff_assign")
+    @discord.ui.button(label="Assign", style=discord.ButtonStyle.primary, custom_id="oman_staff_assign")
     async def assign(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         await interaction.response.send_modal(StaffIdModal("assign"))
 
-    @discord.ui.button(label="Transfer", emoji="🔁", style=discord.ButtonStyle.primary, custom_id="oman_staff_transfer")
+    @discord.ui.button(label="Transfer", style=discord.ButtonStyle.primary, custom_id="oman_staff_transfer")
     async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         await interaction.response.send_modal(StaffIdModal("transfer"))
 
-    @discord.ui.button(label="Add Member", emoji="➕", style=discord.ButtonStyle.secondary, custom_id="oman_staff_add_member")
+    @discord.ui.button(label="Add Member", style=discord.ButtonStyle.secondary, custom_id="oman_staff_add_member")
     async def add_member(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         await interaction.response.send_modal(UserIdModal("add"))
 
-    @discord.ui.button(label="Remove Member", emoji="➖", style=discord.ButtonStyle.secondary, custom_id="oman_staff_remove_member")
+    @discord.ui.button(label="Remove Member", style=discord.ButtonStyle.secondary, custom_id="oman_staff_remove_member")
     async def remove_member(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         await interaction.response.send_modal(UserIdModal("remove"))
 
-    @discord.ui.button(label="Priority: Normal", emoji="⚑", style=discord.ButtonStyle.secondary, custom_id="oman_staff_priority")
+    @discord.ui.button(label="Priority: Normal", style=discord.ButtonStyle.secondary, custom_id="oman_staff_priority")
     async def priority(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         levels = ["Low", "Normal", "High", "Urgent"]
@@ -201,12 +201,12 @@ class TicketStaffTools(discord.ui.View):
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(f"Priority changed to **{next_level}**.", ephemeral=True)
 
-    @discord.ui.button(label="Staff Reply", emoji="💬", style=discord.ButtonStyle.primary, custom_id="oman_staff_reply")
+    @discord.ui.button(label="Staff Reply", style=discord.ButtonStyle.primary, custom_id="oman_staff_reply")
     async def reply(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         await interaction.response.send_modal(StaffReplyModal())
 
-    @discord.ui.button(label="Close", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="oman_staff_close")
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, custom_id="oman_staff_close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await require_staff(interaction): return
         await interaction.response.send_modal(CloseReasonModal())
@@ -256,7 +256,11 @@ class TicketPanel(discord.ui.View):
         welcome = discord.Embed(title=f"🎫 Oman Air Support Ticket #{number}", description=f"Welcome {interaction.user.mention}. Describe your support request below.\n\nA staff member will assist you soon.", color=discord.Color.from_rgb(0, 45, 90))
         welcome.add_field(name="Ticket privacy", value="This channel is private to you and support staff.", inline=False)
         await channel.send(embed=welcome, view=TicketStaffTools())
-        confirmation = discord.Embed(title="✅ Oman Air Support Ticket Created", description=f"Your private support ticket is ready: {channel.mention}\n\nPlease open the ticket channel and describe your request. Support staff will assist you soon.", color=discord.Color.from_rgb(0, 45, 90))\n        confirmation.add_field(name="Ticket number", value=f"#{number}", inline=True)\n        confirmation.add_field(name="Privacy", value="Only you and support staff can view the ticket channel.", inline=True)\n        confirmation.set_footer(text="Oman Air Support")\n        await interaction.response.send_message(embed=confirmation, ephemeral=True)
+        confirmation = discord.Embed(title="✅ Oman Air Support Ticket Created", description=f"Your private support ticket is ready: {channel.mention}\n\nPlease open the ticket channel and describe your request. Support staff will assist you soon.", color=discord.Color.from_rgb(0, 45, 90))
+        confirmation.add_field(name="Ticket number", value=f"#{number}", inline=True)
+        confirmation.add_field(name="Privacy", value="Only you and support staff can view the ticket channel.", inline=True)
+        confirmation.set_footer(text="Oman Air Support")
+        await interaction.response.send_message(embed=confirmation, ephemeral=True)
 
 class TicketControls(discord.ui.View):
     def __init__(self):
