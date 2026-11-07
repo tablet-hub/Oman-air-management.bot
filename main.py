@@ -256,7 +256,7 @@ class TicketPanel(discord.ui.View):
         welcome = discord.Embed(title=f"🎫 Oman Air Support Ticket #{number}", description=f"Welcome {interaction.user.mention}. Describe your support request below.\n\nA staff member will assist you soon.", color=discord.Color.from_rgb(0, 45, 90))
         welcome.add_field(name="Ticket privacy", value="This channel is private to you and support staff.", inline=False)
         await channel.send(embed=welcome, view=TicketStaffTools())
-        await interaction.response.send_message(f"Ticket created: {channel.mention}", ephemeral=True)
+        confirmation = discord.Embed(title="✅ Oman Air Support Ticket Created", description=f"Your private support ticket is ready: {channel.mention}\n\nPlease open the ticket channel and describe your request. Support staff will assist you soon.", color=discord.Color.from_rgb(0, 45, 90))\n        confirmation.add_field(name="Ticket number", value=f"#{number}", inline=True)\n        confirmation.add_field(name="Privacy", value="Only you and support staff can view the ticket channel.", inline=True)\n        confirmation.set_footer(text="Oman Air Support")\n        await interaction.response.send_message(embed=confirmation, ephemeral=True)
 
 class TicketControls(discord.ui.View):
     def __init__(self):
