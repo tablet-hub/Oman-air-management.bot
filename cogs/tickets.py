@@ -341,7 +341,7 @@ class TicketControls(discord.ui.View):
             )
         )
 
-    @discord.ui.button(
+     @discord.ui.button(
         label="Assign",
         emoji="👤",
         style=discord.ButtonStyle.primary,
@@ -356,11 +356,12 @@ class TicketControls(discord.ui.View):
             )
             return
 
-        await interaction.response.send_modal(
-            AssignTicketModal(self.cog)
+        await interaction.response.send_message(
+            "Select the staff member:",
+            view=AssignTicketView(self.cog),
+            ephemeral=True
         )
-
-    @discord.ui.button(
+       @discord.ui.button(
         label="Transfer",
         emoji="🔄",
         style=discord.ButtonStyle.primary,
@@ -373,6 +374,13 @@ class TicketControls(discord.ui.View):
                 "Staff only.",
                 ephemeral=True
             )
+            return
+
+        await interaction.response.send_message(
+            "Select the staff member to transfer this ticket to:",
+            view=AssignTicketView(self.cog),
+            ephemeral=True
+        )
             return
 
      await interaction.response.send_message(
