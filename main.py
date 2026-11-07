@@ -16,6 +16,7 @@ if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from Railway variables.")
 
 COG_FOLDER = Path("cogs")
+GUILD_ID = int(os.getenv("GUILD_ID", "0") or 0)
 
 # -----------------------------
 # LOGGING
@@ -67,10 +68,16 @@ class OmanAirBot(commands.Bot):
             except Exception:
                 logger.exception(f"Failed to load: {extension}")
 
-        # Sync slash commands AFTER loading Cogs
+        # Guild sync makes slash commands appear immediately in the target server.
         try:
-            synced = await self.tree.sync()
-            logger.info(f"Synced {len(synced)} slash commands.")
+            if GUILD_ID:
+                guild = discord.Object(id=GUILD_ID)
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                logger.info(f"Synced {len(synced)} commands to guild {GUILD_ID}.")
+            else:
+                synced = await self.tree.sync()
+                logger.info(f"Synced {len(synced)} global slash commands. Global updates can take time to appear.")
 
         except Exception:
             logger.exception("Slash command sync failed.")
