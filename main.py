@@ -32,6 +32,14 @@ def guild_data(guild_id):
     data = load_data()
     return data.setdefault(str(guild_id), {})
 
+def staff_member(member: discord.Member, cfg: dict) -> bool:
+    role = member.guild.get_role(cfg.get("staff_role_id", 0))
+    return member.guild_permissions.administrator or bool(role and role in member.roles)
+
+def ticket_record(guild_id: int, channel_id: int):
+    data = load_data()
+    return data.get(str(guild_id), {}).get("tickets", {}).get(str(channel_id))
+
 class TicketBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -91,8 +99,10 @@ class TicketPanel(discord.ui.View):
             interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
             staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            interaction.guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True),
         }
+        if interaction.guild.me:
+            overwrites[interaction.guild.me] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True, manage_channels=True)
         try:
             channel = await interaction.guild.create_text_channel(
                 name=f"ticket-{number:04d}", category=category, overwrites=overwrites,
@@ -105,11 +115,13 @@ class TicketPanel(discord.ui.View):
 
         tickets[str(channel.id)] = {
             "ticket_number": number, "channel_id": channel.id,
-            "creator_id": interaction.user.id, "status": "open"
+            "creator_id": interaction.user.id, "status": "open", "claimed_by": None
         }
         save_data(data)
         await channel.send(
-            f"Welcome {interaction.user.mention} to Oman Air Support. A staff member will help you shortly.",
+            f"Welcome {interaction.user.mention} to Oman Air Support.\n"
+            "Please describe your issue clearly and include relevant details.\n"
+            "A support staff member will respond as soon as possible.",
             view=TicketControls())
         await interaction.response.send_message(f"Ticket created: {channel.mention}", ephemeral=True)
 
@@ -123,17 +135,17 @@ class TicketControls(discord.ui.View):
         if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return await interaction.response.send_message("Server-only action.", ephemeral=True)
         cfg = guild_data(interaction.guild.id)
-        role = interaction.guild.get_role(cfg.get("staff_role_id", 0))
-        record = load_data().get(str(interaction.guild.id), {}).get("tickets", {}).get(str(interaction.channel_id))
-        authorized = interaction.user.guild_permissions.administrator or (role and role in interaction.user.roles)
-        creator = record and record.get("creator_id") == interaction.user.id
+        record = ticket_record(interaction.guild.id, interaction.channel_id)
+        if not record:
+            return await interaction.response.send_message("This channel is not a tracked ticket.", ephemeral=True)
+        authorized = staff_member(interaction.user, cfg)
+        creator = record.get("creator_id") == interaction.user.id
         if not authorized and not creator:
             return await interaction.response.send_message("Only the ticket owner or support staff can close this ticket.", ephemeral=True)
-        if record:
-            data = load_data()
-            data[str(interaction.guild.id)]["tickets"][str(interaction.channel_id)]["status"] = "closed"
-            save_data(data)
-        await interaction.response.send_message("Ticket closed. This channel will be archived by staff.")
+        data = load_data()
+        data[str(interaction.guild.id)]["tickets"][str(interaction.channel_id)]["status"] = "closed"
+        save_data(data)
+        await interaction.response.send_message(f"Ticket closed by {interaction.user.mention}.")
         try:
             await interaction.channel.edit(name=f"closed-{interaction.channel.name}"[:100])
             if creator and not authorized:
@@ -156,17 +168,87 @@ async def ticketsetup(interaction: discord.Interaction, staff_role: discord.Role
         f"Ticket system configured. Staff role: {staff_role.mention} | Category: {category.name}",
         ephemeral=True)
 
-@bot.tree.command(name="ticketpanel", description="Post the support ticket button panel")
+@bot.tree.command(name="ticketpanel", description="Post the extended support ticket panel")
 @app_commands.default_permissions(administrator=True)
 async def ticketpanel(interaction: discord.Interaction):
     cfg = guild_data(interaction.guild_id)
     if not cfg.get("staff_role_id") or not cfg.get("category_id"):
         return await interaction.response.send_message("Run /ticketsetup first.", ephemeral=True)
     embed = discord.Embed(
-        title="Oman Air Customer Support",
-        description="Press **Open Support Ticket** below to contact the team privately.",
+        title="✈️ Oman Air | Customer Support Center",
+        description=(
+            "Welcome to the Oman Air Support Center. Our team is here to assist with "
+            "flight-management questions, booking support, account concerns, and other "
+            "server-related matters.\n\n"
+            "**Before opening a ticket**\n"
+            "• Check whether your question has already been answered.\n"
+            "• Choose a clear and descriptive explanation when your ticket opens.\n"
+            "• Please keep all support conversations inside your private ticket.\n"
+            "• Do not share passwords, tokens, or other confidential information.\n\n"
+            "Press **Open Support Ticket** below to create a private channel visible "
+            "to you and the support team."
+        ),
         color=discord.Color.from_rgb(0, 45, 90))
+    embed.add_field(name="🎫 Ticket process", value="1. Open a ticket\n2. Explain your request\n3. Staff will reply\n4. Close the ticket when resolved", inline=False)
+    embed.add_field(name="🧑‍✈️ Support team", value="Support staff can claim tickets and help resolve your request. Please be respectful and patient.", inline=False)
+    embed.add_field(name="🔐 Privacy", value="Ticket channels are private to the ticket creator and configured staff role. Avoid posting sensitive personal information.", inline=False)
+    embed.set_footer(text="Oman Air Support • Virtual server support system")
     await interaction.channel.send(embed=embed, view=TicketPanel())
-    await interaction.response.send_message("Ticket panel posted.", ephemeral=True)
+    await interaction.response.send_message("Extended ticket panel posted.", ephemeral=True)
+
+@bot.tree.command(name="ticketclaim", description="Staff: claim the ticket in this channel")
+async def ticketclaim(interaction: discord.Interaction):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in a server ticket channel.", ephemeral=True)
+    cfg = guild_data(interaction.guild.id)
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured support staff can claim tickets.", ephemeral=True)
+    record = ticket_record(interaction.guild.id, interaction.channel_id)
+    if not record or record.get("status") != "open":
+        return await interaction.response.send_message("This is not an open ticket.", ephemeral=True)
+    if record.get("claimed_by"):
+        return await interaction.response.send_message(f"Already claimed by <@{record['claimed_by']}>.", ephemeral=True)
+    data = load_data()
+    data[str(interaction.guild.id)]["tickets"][str(interaction.channel_id)]["claimed_by"] = interaction.user.id
+    save_data(data)
+    await interaction.response.send_message(f"🧑‍✈️ Ticket claimed by {interaction.user.mention}. The team has been notified.")
+
+@bot.tree.command(name="ticketstats", description="Staff: view support ticket statistics")
+async def ticketstats(interaction: discord.Interaction):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
+    cfg = guild_data(interaction.guild.id)
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured support staff can view ticket stats.", ephemeral=True)
+    tickets = cfg.get("tickets", {})
+    total = len(tickets)
+    opened = sum(1 for t in tickets.values() if t.get("status") == "open")
+    closed = sum(1 for t in tickets.values() if t.get("status") == "closed")
+    claimed = sum(1 for t in tickets.values() if t.get("claimed_by"))
+    embed = discord.Embed(title="📊 Oman Air Support Statistics", color=discord.Color.blue())
+    embed.add_field(name="Total tickets", value=str(total), inline=True)
+    embed.add_field(name="Open tickets", value=str(opened), inline=True)
+    embed.add_field(name="Closed tickets", value=str(closed), inline=True)
+    embed.add_field(name="Claimed tickets", value=str(claimed), inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="ticketclose", description="Staff: close and archive the ticket in this channel")
+async def ticketclose(interaction: discord.Interaction):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in a server ticket channel.", ephemeral=True)
+    cfg = guild_data(interaction.guild.id)
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured support staff can use this command.", ephemeral=True)
+    record = ticket_record(interaction.guild.id, interaction.channel_id)
+    if not record or record.get("status") != "open":
+        return await interaction.response.send_message("This is not an open ticket.", ephemeral=True)
+    data = load_data()
+    data[str(interaction.guild.id)]["tickets"][str(interaction.channel_id)]["status"] = "closed"
+    save_data(data)
+    await interaction.response.send_message(f"🔒 Ticket closed by staff member {interaction.user.mention}.")
+    try:
+        await interaction.channel.edit(name=f"closed-{interaction.channel.name}"[:100])
+    except discord.HTTPException:
+        log.exception("Could not rename closed ticket")
 
 bot.run(TOKEN)
