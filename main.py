@@ -145,6 +145,33 @@ class StaffReplyModal(discord.ui.Modal):
         await interaction.channel.send(embed=embed)
         await interaction.response.send_message("Your embedded reply was sent.", ephemeral=True)
 
+class PrioritySelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Low", value="Low", description="Low-priority ticket"),
+            discord.SelectOption(label="Normal", value="Normal", description="Standard priority"),
+            discord.SelectOption(label="High", value="High", description="High-priority ticket"),
+            discord.SelectOption(label="Urgent", value="Urgent", description="Urgent attention required"),
+        ]
+        super().__init__(placeholder="Choose a ticket priority...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await require_staff(interaction):
+            return
+        selected = self.values[0]
+        update_ticket(interaction.guild.id, interaction.channel_id, "priority", selected)
+        channel_name = interaction.channel.name
+        suffixes = ["low", "normal", "high", "urgent"]
+        parts = channel_name.rsplit("-", 1)
+        base_name = parts[0] if len(parts) == 2 and parts[1].lower() in suffixes else channel_name
+        await interaction.channel.edit(name=f"{base_name}-{selected.lower()}"[:100])
+        await interaction.response.edit_message(content=f"Ticket priority changed to **{selected}**. You can use the Change Priority button again at any time.", view=None)
+
+class PrioritySelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(PrioritySelect())
+
 class TicketStaffTools(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -187,21 +214,11 @@ class TicketStaffTools(discord.ui.View):
         if not await require_staff(interaction): return
         await interaction.response.send_modal(UserIdModal("remove"))
 
-    @discord.ui.button(label="Priority: Normal", style=discord.ButtonStyle.secondary, custom_id="oman_staff_priority")
+    @discord.ui.button(label="Change Priority", style=discord.ButtonStyle.secondary, custom_id="oman_staff_priority")
     async def priority(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await require_staff(interaction): return
-        levels = ["Low", "Normal", "High", "Urgent"]
-        record = ticket_record(interaction.guild.id, interaction.channel_id)
-        current = record.get("priority", "Normal")
-        next_level = levels[(levels.index(current) + 1) % len(levels)] if current in levels else "Normal"
-        update_ticket(interaction.guild.id, interaction.channel_id, "priority", next_level)
-        channel_name = interaction.channel.name
-        base_name = channel_name.rsplit("-", 1)[0] if channel_name.rsplit("-", 1)[-1].lower() in ["low", "normal", "high", "urgent"] else channel_name
-        await interaction.channel.edit(name=f"{base_name}-{next_level.lower()}"[:100])
-        button.label = f"Priority: {next_level}"
-        button.style = discord.ButtonStyle.danger if next_level == "Urgent" else (discord.ButtonStyle.primary if next_level == "High" else discord.ButtonStyle.secondary)
-        await interaction.response.edit_message(view=self)
-        await interaction.followup.send(f"Priority changed to **{next_level}**.", ephemeral=True)
+        if not await require_staff(interaction):
+            return
+        await interaction.response.send_message("Select the new priority. You can change it again whenever needed.", view=PrioritySelectView(), ephemeral=True)
 
     @discord.ui.button(label="Staff Reply", style=discord.ButtonStyle.primary, custom_id="oman_staff_reply")
     async def reply(self, interaction: discord.Interaction, button: discord.ui.Button):
