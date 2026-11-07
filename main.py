@@ -19,6 +19,10 @@ if not TOKEN:
 if not GUILD_ID:
     raise RuntimeError("Missing GUILD_ID environment variable. Set it to your Discord server ID.")
 
+# Create the bot before registering slash commands.
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
 def load_data():
     try:
         return json.loads(DATA_PATH.read_text(encoding="utf-8"))
@@ -325,7 +329,6 @@ async def ticketstats(interaction: discord.Interaction):
     embed.add_field(name="Claimed", value=str(sum(bool(t.get("claimed_by")) for t in tickets.values())), inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-bot = TicketBot()
 
 # Persistent component views are registered at startup.
 async def setup_views():
