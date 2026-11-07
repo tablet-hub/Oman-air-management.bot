@@ -64,14 +64,14 @@ class TicketPanel(discord.ui.View):
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.guild:
             return await interaction.response.send_message("Use this button in the server.", ephemeral=True)
-        cfg = guild_data(interaction.guild.id)
+        data = load_data()
+        cfg = data.setdefault(str(interaction.guild.id), {})
         category_id = cfg.get("category_id")
         staff_role_id = cfg.get("staff_role_id")
         if not category_id or not staff_role_id:
             return await interaction.response.send_message("Admin must run /ticketsetup first.", ephemeral=True)
 
-        data = load_data()
-        tickets = data.setdefault(str(interaction.guild.id), {}).setdefault("tickets", {})
+        tickets = cfg.setdefault("tickets", {})
         for record in tickets.values():
             if record.get("creator_id") == interaction.user.id and record.get("status") == "open":
                 channel = interaction.guild.get_channel(record.get("channel_id", 0))
