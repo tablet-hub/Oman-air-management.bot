@@ -181,30 +181,13 @@ class AddMemberModal(discord.ui.Modal, title="Add Member to Ticket"):
 class PrioritySelect(discord.ui.Select):
 
     def __init__(self, cog):
-
         self.cog = cog
 
         options = [
-            discord.SelectOption(
-                label="Low",
-                value="Low",
-                emoji="🟢"
-            ),
-            discord.SelectOption(
-                label="Normal",
-                value="Normal",
-                emoji="🟡"
-            ),
-            discord.SelectOption(
-                label="High",
-                value="High",
-                emoji="🟠"
-            ),
-            discord.SelectOption(
-                label="Urgent",
-                value="Urgent",
-                emoji="🔴"
-            )
+            discord.SelectOption(label="Low", value="Low", emoji="🟢"),
+            discord.SelectOption(label="Normal", value="Normal", emoji="🟡"),
+            discord.SelectOption(label="High", value="High", emoji="🟠"),
+            discord.SelectOption(label="Urgent", value="Urgent", emoji="🔴")
         ]
 
         super().__init__(
@@ -225,7 +208,6 @@ class PrioritySelect(discord.ui.Select):
             return
 
         priority = self.values[0]
-
         record = self.cog.get_ticket(interaction.channel.id)
 
         if record is None:
@@ -235,26 +217,47 @@ class PrioritySelect(discord.ui.Select):
             )
             return
 
+        priority_symbols = {
+            "Low": "🟢",
+            "Normal": "🟡",
+            "High": "🟠",
+            "Urgent": "🔴"
+        }
+
+        symbol = priority_symbols[priority]
+
+        # Remove any existing priority symbol
+        channel_name = interaction.channel.name
+
+        for old_symbol in priority_symbols.values():
+            channel_name = channel_name.replace(old_symbol + "-", "")
+
+        new_name = f"{symbol}-{channel_name}"
+
         record["priority"] = priority
         record["updated_at"] = current_time()
-
         self.cog.save()
-         
 
-        await interaction.channel.edit(
-            name=f"{symbol}-{channel_name}"
+        # Acknowledge the interaction before editing the channel
+        await interaction.response.send_message(
+            f"{symbol} Ticket priority changed to **{priority}**.",
+            ephemeral=True
         )
+
+        try:
+            await interaction.channel.edit(name=new_name)
+        except discord.HTTPException:
+            await interaction.followup.send(
+                "Priority saved, but I couldn't rename the channel.",
+                ephemeral=True
+            )
 
         embed = make_embed(
             "Ticket Priority Updated",
             f"Priority has been changed to **{priority}**."
         )
 
-        await interaction.response.send_message(
-            embed=embed
-        )
-
-
+        await interaction.channel.send(embed=embed)
 class PriorityView(discord.ui.View):
 
     def __init__(self, cog):
