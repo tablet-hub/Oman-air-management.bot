@@ -15,7 +15,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN is missing from Railway variables.")
 
-COG_FOLDER = Path("Cogs")
+COG_FOLDER = Path("cogs")
 
 # -----------------------------
 # LOGGING
@@ -58,7 +58,7 @@ class OmanAirBot(commands.Bot):
             if file.name.startswith("_"):
                 continue
 
-            extension = f"Cogs.{file.stem}"
+            extension = f"cogs.{file.stem}"
 
             try:
                 await self.load_extension(extension)
