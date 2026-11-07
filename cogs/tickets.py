@@ -433,13 +433,11 @@ class TicketControls(discord.ui.View):
         style=discord.ButtonStyle.secondary,
         custom_id="oman_ticket_remove_member"
     )
-    async def remove_member(self, interaction, button):
-
-        if not self.cog.is_staff(interaction):
-            await interaction.response.send_message(
-                "Staff only.",
-                ephemeral=True
-            )
+          await interaction.response.send_message(
+            "Select the member to remove:",
+            view=TicketMemberView(self.cog, remove=True),
+            ephemeral=True
+        )
             return
 
         await interaction.response.send_modal(
