@@ -69,52 +69,41 @@ class CloseTicketModal(discord.ui.Modal, title="Close Ticket"):
         )
 
 
-class AssignTicketModal(discord.ui.Modal, title="Assign Ticket"):
-
-    staff_id = discord.ui.TextInput(
-        label="Staff Member Discord ID",
-        placeholder="Enter the staff member's Discord ID",
-        required=True,
-        max_length=20
-    )
+class AssignTicketView(discord.ui.View):
 
     def __init__(self, cog):
-        super().__init__()
+        super().__init__(timeout=120)
         self.cog = cog
 
-    async def on_submit(self, interaction: discord.Interaction):
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="Select a staff member...",
+        min_values=1,
+        max_values=1
+    )
+    async def select_staff(
+        self,
+        interaction: discord.Interaction,
+        select: discord.ui.UserSelect
+    ):
 
-        try:
-            user_id = int(str(self.staff_id))
-        except ValueError:
-            await interaction.response.send_message(
-                "Invalid Discord ID.",
-                ephemeral=True
-            )
-            return
-
-        member = interaction.guild.get_member(user_id)
+        member = interaction.guild.get_member(select.values[0].id)
 
         if member is None:
             await interaction.response.send_message(
-                "That staff member is not in this server.",
+                "Member not found in this server.",
                 ephemeral=True
             )
             return
 
         if not self.cog.is_staff(interaction, member):
             await interaction.response.send_message(
-                "That member is not an authorized ticket staff member.",
+                "That member is not authorized ticket staff.",
                 ephemeral=True
             )
             return
 
-        await self.cog.assign_ticket(
-            interaction,
-            member
-        )
-
-
+        await self.cog.assign_ticket(interaction, member)
 class AddMemberModal(discord.ui.Modal, title="Add Member to Ticket"):
 
     member_id = discord.ui.TextInput(
@@ -386,9 +375,11 @@ class TicketControls(discord.ui.View):
             )
             return
 
-        await interaction.response.send_modal(
-            AssignTicketModal(self.cog)
-        )
+     await interaction.response.send_message(
+    "Select the staff member to assign this ticket to:",
+    view=AssignTicketView(self.cog),
+    ephemeral=True
+)
 
     @discord.ui.button(
         label="Priority",
