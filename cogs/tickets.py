@@ -239,6 +239,23 @@ class PrioritySelect(discord.ui.Select):
         record["updated_at"] = current_time()
 
         self.cog.save()
+                priority_symbols = {
+            "Low": "🟢",
+            "Normal": "🟡",
+            "High": "🟠",
+            "Urgent": "🔴"
+        }
+
+        symbol = priority_symbols.get(priority, "⚪")
+
+        channel_name = interaction.channel.name
+
+        for old_symbol in priority_symbols.values():
+            channel_name = channel_name.replace(f"{old_symbol}-", "")
+
+        await interaction.channel.edit(
+            name=f"{symbol}-{channel_name}"
+        )
 
         embed = make_embed(
             "Ticket Priority Updated",
