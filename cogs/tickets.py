@@ -855,6 +855,56 @@ class Tickets(commands.Cog):
             ephemeral=True
         )
 
+class TicketMemberView(discord.ui.View):
+
+    def __init__(self, cog, remove=False):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.remove = remove
+
+    @discord.ui.select(
+        cls=discord.ui.UserSelect,
+        placeholder="Select a member...",
+        min_values=1,
+        max_values=1
+    )
+    async def select_member(
+        self,
+        interaction: discord.Interaction,
+        select: discord.ui.UserSelect
+    ):
+
+        member = interaction.guild.get_member(select.values[0].id)
+
+        if member is None:
+            await interaction.response.send_message(
+                "Member not found in this server.",
+                ephemeral=True
+            )
+            return
+
+        if self.remove:
+            await interaction.channel.set_permissions(
+                member,
+                overwrite=None
+            )
+
+            message = f"Removed {member.mention} from the ticket."
+
+        else:
+            await interaction.channel.set_permissions(
+                member,
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True
+            )
+
+            message = f"Added {member.mention} to the ticket."
+
+        await interaction.response.send_message(
+            message,
+            ephemeral=True
+        )
 
 async def setup(bot):
 
