@@ -191,8 +191,9 @@ class PriorityView(discord.ui.View):
         self.add_item(PrioritySelect(cog))
 
 
-    
-        class TicketControls(discord.ui.View):
+
+
+class TicketControls(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=None)
         self.cog = cog
