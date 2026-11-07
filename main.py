@@ -68,16 +68,18 @@ class OmanAirBot(commands.Bot):
             except Exception:
                 logger.exception(f"Failed to load: {extension}")
 
-        # Guild sync makes slash commands appear immediately in the target server.
+        # Remove stale global registrations, then sync only to the configured server.
         try:
-            if GUILD_ID:
-                guild = discord.Object(id=GUILD_ID)
-                self.tree.copy_global_to(guild=guild)
-                synced = await self.tree.sync(guild=guild)
-                logger.info(f"Synced {len(synced)} commands to guild {GUILD_ID}.")
-            else:
-                synced = await self.tree.sync()
-                logger.info(f"Synced {len(synced)} global slash commands. Global updates can take time to appear.")
+            if not GUILD_ID:
+                logger.error("GUILD_ID is missing. Set the Discord server ID in Railway variables.")
+                return
+
+            guild = discord.Object(id=GUILD_ID)
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            logger.info(f"Synced {len(synced)} server commands to guild {GUILD_ID}.")
 
         except Exception:
             logger.exception("Slash command sync failed.")
