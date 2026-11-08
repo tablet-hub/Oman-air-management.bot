@@ -19,6 +19,46 @@ MAIN_GUILD_ID = int(os.getenv("MAIN_GUILD_ID", "1552773061894348952") or "155277
 MAIN_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("MAIN_ANNOUNCEMENT_CHANNEL_ID", "1554496632890986498") or "1554496632890986498")
 DATA_PATH = Path("tickets.json")
 
+# Add consistent Oman Air branding to every message sent by the bot.
+BRAND_SIGNATURE = "Oman Air • A world of possibilities • a oneworld partner"
+
+def _brand_message_kwargs(kwargs):
+    kwargs = dict(kwargs)
+    content = kwargs.get("content")
+    if isinstance(content, str) and content.strip() and BRAND_SIGNATURE not in content:
+        kwargs["content"] = content + "\n\n" + BRAND_SIGNATURE
+    embed = kwargs.get("embed")
+    if isinstance(embed, discord.Embed):
+        embed.set_footer(text=BRAND_SIGNATURE)
+    embeds = kwargs.get("embeds")
+    if embeds:
+        for item in embeds:
+            if isinstance(item, discord.Embed):
+                item.set_footer(text=BRAND_SIGNATURE)
+    return kwargs
+
+_original_messageable_send = discord.abc.Messageable.send
+async def _branded_messageable_send(self, *args, **kwargs):
+    if args and isinstance(args[0], str) and BRAND_SIGNATURE not in args[0]:
+        args = (args[0] + "\n\n" + BRAND_SIGNATURE,) + args[1:]
+    return await _original_messageable_send(self, *args, **_brand_message_kwargs(kwargs))
+discord.abc.Messageable.send = _branded_messageable_send
+
+_original_interaction_send = discord.InteractionResponse.send_message
+async def _branded_interaction_send(self, *args, **kwargs):
+    if args and isinstance(args[0], str) and BRAND_SIGNATURE not in args[0]:
+        args = (args[0] + "\n\n" + BRAND_SIGNATURE,) + args[1:]
+    return await _original_interaction_send(self, *args, **_brand_message_kwargs(kwargs))
+discord.InteractionResponse.send_message = _branded_interaction_send
+
+_original_webhook_send = discord.Webhook.send
+async def _branded_webhook_send(self, *args, **kwargs):
+    if args and isinstance(args[0], str) and BRAND_SIGNATURE not in args[0]:
+        args = (args[0] + "\n\n" + BRAND_SIGNATURE,) + args[1:]
+    return await _original_webhook_send(self, *args, **_brand_message_kwargs(kwargs))
+discord.Webhook.send = _branded_webhook_send
+
+
 if not TOKEN:
     raise RuntimeError("Missing DISCORD_TOKEN environment variable.")
 if not GUILD_ID:
