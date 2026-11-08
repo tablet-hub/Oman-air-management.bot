@@ -311,47 +311,73 @@ class TicketControls(discord.ui.View):
         await interaction.response.send_message("Ticket closed. This channel will be deleted shortly.")
         await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
 
-@bot.tree.command(name="welcomesetup", description="Set the channel for automatic member welcome messages")
+@bot.tree.command(name="welcomesetup", description="Configure automatic welcome messages for new members")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(channel="Channel where new members should be welcomed")
+@app_commands.describe(channel="Text channel where new members should be welcomed")
 async def welcomesetup(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.guild:
+        return await interaction.response.send_message("Run this command inside your server.", ephemeral=True)
+    if channel.guild.id != interaction.guild.id:
+        return await interaction.response.send_message("Choose a channel from this server.", ephemeral=True)
     data = load_data()
-    cfg = data.setdefault(str(interaction.guild_id), {})
+    cfg = data.setdefault(str(interaction.guild.id), {})
     cfg["welcome_channel_id"] = channel.id
     save_data(data)
     await interaction.response.send_message(
-        f"Automatic welcome messages are now enabled in {channel.mention}.",
+        f"✅ **Welcome messages configured!** New members will receive the Oman Air welcome embed in {channel.mention}.",
         ephemeral=True
     )
 
 @bot.event
 async def on_member_join(member: discord.Member):
-    cfg = guild_data(member.guild.id)
-    channel_id = cfg.get("welcome_channel_id")
-    if not channel_id:
-        return
-    channel = member.guild.get_channel(channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        log.warning("Configured welcome channel %s was not found in guild %s", channel_id, member.guild.id)
-        return
-    embed = discord.Embed(
-        title="✈️ Welcome to Oman Air!",
-        description=(
-            f"Welcome aboard, {member.mention}! We're glad you've joined **{member.guild.name}**.\n\n"
-            "Please take a moment to read the server rules and get familiar with our community. "
-            "If you need assistance, our support ticket system is here to help."
-        ),
-        color=discord.Color.from_rgb(0, 45, 90)
-    )
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.add_field(name="Member", value=member.mention, inline=True)
-    embed.add_field(name="Member number", value=str(member.guild.member_count or "—"), inline=True)
-    embed.set_footer(text="Oman Air • Virtual Aviation Community")
     try:
-        await channel.send(embed=embed)
-    except discord.Forbidden:
-        log.error("Missing permission to send welcome message in channel %s", channel.id)
+        cfg = load_data().get(str(member.guild.id), {})
+        channel_id = cfg.get("welcome_channel_id")
+        if not channel_id:
+            log.info("No welcome channel configured for guild %s", member.guild.id)
+            return
 
+        channel = member.guild.get_channel(int(channel_id))
+        if channel is None:
+            try:
+                channel = await member.guild.fetch_channel(int(channel_id))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                log.exception("Unable to resolve welcome channel %s in guild %s", channel_id, member.guild.id)
+                return
+
+        if not isinstance(channel, discord.TextChannel):
+            log.error("Configured welcome destination %s is not a text channel.", channel_id)
+            return
+
+        embed = discord.Embed(
+            title="✈️ Welcome Aboard Oman Air!",
+            description=(
+                f"Hello {member.mention}, and welcome to **{member.guild.name}**!\n\n"
+                "We're delighted to have you join our virtual aviation community. "
+                "Please review the server rules, explore the channels, and get ready for your journey.\n\n"
+                "Need help with bookings or the community? Open a support ticket and our team will assist you."
+            ),
+            color=discord.Color.from_rgb(0, 45, 90),
+            timestamp=discord.utils.utcnow()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="👤 New Member", value=member.mention, inline=True)
+        embed.add_field(name="🛫 Member Number", value=str(member.guild.member_count or "—"), inline=True)
+        embed.add_field(name="📌 Getting Started", value="Read the rules • Check announcements • Say hello", inline=False)
+        if member.guild.icon:
+            embed.set_author(name="Oman Air • Virtual Aviation", icon_url=member.guild.icon.url)
+        embed.set_footer(text="Oman Air • Virtual Aviation Community")
+
+        await channel.send(
+            content=f"Welcome {member.mention}!",
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False)
+        )
+        log.info("Welcome message sent for member %s (%s) in guild %s", member, member.id, member.guild.id)
+    except discord.Forbidden:
+        log.error("Missing permission to send welcome message in configured channel for guild %s", member.guild.id)
+    except discord.HTTPException:
+        log.exception("Discord API error while sending welcome message for member %s", member.id)
 # ---------------- Moderation system ----------------
 
 def is_moderator(member: discord.Member) -> bool:
