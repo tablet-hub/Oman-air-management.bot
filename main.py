@@ -558,6 +558,158 @@ async def ticketstats(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+
+# ---------------- Professional flight announcement system ----------------
+
+flight_group = app_commands.Group(name="flight", description="Manage Oman Air flight announcements")
+
+def save_guild_config(guild_id: int, key: str, value):
+    data = load_data()
+    cfg = data.setdefault(str(guild_id), {})
+    cfg[key] = value
+    save_data(data)
+    return cfg
+
+def flight_embed(guild: discord.Guild, flight: dict, title: str = "✈️ OMAN AIR | FLIGHT ANNOUNCEMENT"):
+    embed = discord.Embed(
+        title=title,
+        description=f"**{flight['flight_number']}**\n{flight['origin']}  ➜  {flight['destination']}",
+        color=discord.Color.from_rgb(0, 45, 90)
+    )
+    embed.add_field(name="🛫 Departure", value=flight["departure"], inline=True)
+    embed.add_field(name="🛬 Arrival", value=flight["arrival"], inline=True)
+    embed.add_field(name="🛩️ Aircraft", value=flight["aircraft"], inline=True)
+    embed.add_field(name="🚪 Gate", value=flight.get("gate") or "To be announced", inline=True)
+    embed.add_field(name="📌 Flight Status", value=flight.get("status", "Scheduled"), inline=True)
+    embed.add_field(name="📢 Important", value="Please arrive early and monitor this channel for operational updates.", inline=False)
+    embed.set_footer(text=f"{guild.name} • Oman Air Virtual Operations")
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+async def post_flight_announcement(guild: discord.Guild, flight: dict):
+    cfg = guild_data(guild.id)
+    channel_id = cfg.get("flight_announcement_channel_id")
+    channel = guild.get_channel(channel_id) if channel_id else None
+    if not isinstance(channel, discord.TextChannel):
+        return False
+    await channel.send(embed=flight_embed(guild, flight))
+    return True
+
+@bot.tree.command(name="flightsetup", description="Configure the flight announcement channel")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Channel for official flight announcements")
+async def flightsetup(interaction: discord.Interaction, channel: discord.TextChannel):
+    save_guild_config(interaction.guild_id, "flight_announcement_channel_id", channel.id)
+    await interaction.response.send_message(f"Official flight announcements will be posted in {channel.mention}.", ephemeral=True)
+
+@flight_group.command(name="create", description="Create and publish a professional flight announcement")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.describe(
+    flight_number="Official flight number, e.g. WY201",
+    origin="Departure airport/city",
+    destination="Arrival airport/city",
+    departure="Departure date and time, include timezone (e.g. 12 Nov 2026, 14:30 UTC)",
+    arrival="Arrival date and time, include timezone",
+    aircraft="Aircraft type",
+    gate="Departure gate or TBA"
+)
+async def flight_create(interaction: discord.Interaction, flight_number: str, origin: str, destination: str, departure: str, arrival: str, aircraft: str, gate: str = "TBA"):
+    if not interaction.guild:
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(interaction.guild.id), {})
+    flights = cfg.setdefault("flights", {})
+    flight_number = flight_number.strip().upper()
+    if flight_number in flights and flights[flight_number].get("status") not in ("Cancelled", "Completed"):
+        return await interaction.response.send_message(f"{flight_number} already exists. Use /flightupdate to update it.", ephemeral=True)
+    flight = {
+        "flight_number": flight_number,
+        "origin": origin.strip()[:100],
+        "destination": destination.strip()[:100],
+        "departure": departure.strip()[:100],
+        "arrival": arrival.strip()[:100],
+        "aircraft": aircraft.strip()[:100],
+        "gate": gate.strip()[:50],
+        "status": "Scheduled",
+        "created_by": interaction.user.id,
+        "created_at": discord.utils.utcnow().isoformat()
+    }
+    flights[flight_number] = flight
+    save_data(data)
+    if not await post_flight_announcement(interaction.guild, flight):
+        return await interaction.response.send_message("Flight saved, but no announcement channel is configured. Run /flightsetup first.", ephemeral=True)
+    await interaction.response.send_message(f"Published the announcement for **{flight_number}**.", ephemeral=True)
+
+@bot.tree.command(name="flightupdate", description="Update a flight's status or gate and publish an update")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.describe(flight_number="Flight to update", status="New status", gate="New gate (optional)")
+async def flightupdate(interaction: discord.Interaction, flight_number: str, status: str, gate: str = ""):
+    if not interaction.guild:
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(interaction.guild.id), {})
+    flights = cfg.setdefault("flights", {})
+    key = flight_number.strip().upper()
+    flight = flights.get(key)
+    if not flight:
+        return await interaction.response.send_message(f"Flight **{key}** was not found.", ephemeral=True)
+    allowed_statuses = ["Scheduled", "Boarding", "Delayed", "Departed", "Arrived", "Cancelled"]
+    normalized = status.strip().title()
+    if normalized not in allowed_statuses:
+        return await interaction.response.send_message("Status must be Scheduled, Boarding, Delayed, Departed, Arrived, or Cancelled.", ephemeral=True)
+    flight["status"] = normalized
+    if gate.strip():
+        flight["gate"] = gate.strip()[:50]
+    flight["updated_at"] = discord.utils.utcnow().isoformat()
+    flight["updated_by"] = interaction.user.id
+    save_data(data)
+    channel_id = cfg.get("flight_announcement_channel_id")
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+    if not isinstance(channel, discord.TextChannel):
+        return await interaction.response.send_message("Flight updated in storage, but announcement channel is not configured. Run /flightsetup.", ephemeral=True)
+    embed = flight_embed(interaction.guild, flight, title=f"📣 OMAN AIR | FLIGHT UPDATE — {key}")
+    await channel.send(embed=embed)
+    await interaction.response.send_message(f"Published update for **{key}**: **{normalized}**.", ephemeral=True)
+
+@flight_group.command(name="list", description="List scheduled flights")
+@app_commands.default_permissions(manage_guild=True)
+async def flight_list(interaction: discord.Interaction):
+    if not interaction.guild:
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    flights = guild_data(interaction.guild.id).get("flights", {})
+    active = [f for f in flights.values() if f.get("status") not in ("Cancelled", "Arrived")]
+    if not active:
+        return await interaction.response.send_message("There are no active flights recorded.", ephemeral=True)
+    embed = discord.Embed(title="🗂️ Oman Air | Active Flight Schedule", color=discord.Color.from_rgb(0, 45, 90))
+    for f in active[:25]:
+        embed.add_field(name=f"{f['flight_number']} • {f['status']}", value=f"{f['origin']} ➜ {f['destination']}\nDeparture: {f['departure']}\nGate: {f.get('gate', 'TBA')}", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@flight_group.command(name="cancel", description="Cancel a flight and publish a cancellation notice")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.describe(flight_number="Flight to cancel", reason="Cancellation reason")
+async def flight_cancel(interaction: discord.Interaction, flight_number: str, reason: str):
+    if not interaction.guild:
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(interaction.guild.id), {})
+    flight = cfg.setdefault("flights", {}).get(flight_number.strip().upper())
+    if not flight:
+        return await interaction.response.send_message("That flight was not found.", ephemeral=True)
+    flight["status"] = "Cancelled"
+    flight["cancellation_reason"] = reason.strip()[:500]
+    flight["updated_at"] = discord.utils.utcnow().isoformat()
+    save_data(data)
+    channel_id = cfg.get("flight_announcement_channel_id")
+    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+    if isinstance(channel, discord.TextChannel):
+        embed = flight_embed(interaction.guild, flight, title=f"❌ OMAN AIR | FLIGHT CANCELLED — {flight['flight_number']}")
+        embed.add_field(name="Cancellation reason", value=reason.strip()[:1024], inline=False)
+        await channel.send(embed=embed)
+    await interaction.response.send_message(f"Flight **{flight['flight_number']}** marked as cancelled.", ephemeral=True)
+
+bot.tree.add_command(flight_group)
+
 # Persistent component views are registered at startup.
 async def setup_views():
     bot.add_view(TicketPanel())
