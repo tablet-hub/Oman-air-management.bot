@@ -703,7 +703,7 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
     if not isinstance(channel, discord.TextChannel):
         return await interaction.response.send_message("Flight updated in storage, but announcement channel is not configured. Run /flightsetup.", ephemeral=True)
     embed = flight_embed(interaction.guild, flight, title=f"📣 OMAN AIR | FLIGHT UPDATE — {key}")
-    await channel.send(embed=embed)
+    await channel.send(content="@everyone", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
     await interaction.response.send_message(f"Published update for **{key}**: **{normalized}**.", ephemeral=True)
 
 @flight_group.command(name="list", description="List scheduled flights")
