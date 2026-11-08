@@ -1371,19 +1371,35 @@ class RobloxUsernameModal(discord.ui.Modal, title="Roblox Account Verification")
             if not users:
                 return await interaction.followup.send("I couldn't find that Roblox username. Check the spelling and try again.", ephemeral=True)
             roblox_user = users[0]
-            code = "OMAN-" + secrets.token_hex(4).upper()
+            if not isinstance(interaction.user, discord.Member):
+                return await interaction.followup.send("I couldn't identify your server membership. Please try again in the main server.", ephemeral=True)
+            verified_role = discord.utils.get(interaction.guild.roles, name="VERIFIED")
+            if verified_role is None:
+                return await interaction.followup.send("The Discord role `VERIFIED` doesn't exist. Ask a server admin to create it.", ephemeral=True)
+            try:
+                await interaction.user.add_roles(verified_role, reason=f"Roblox username exists: {roblox_user.get('name', username)}")
+            except (discord.Forbidden, discord.HTTPException):
+                log.exception("Unable to assign VERIFIED role after Roblox username lookup")
+                return await interaction.followup.send("I found the Roblox account, but couldn't assign VERIFIED. The bot needs Manage Roles and its role must be above VERIFIED.", ephemeral=True)
+            nickname = f"[ECO] {interaction.user.name} | VERIFIED"[:32]
+            nickname_note = ""
+            try:
+                await interaction.user.edit(nick=nickname, reason="Roblox username lookup completed")
+            except (discord.Forbidden, discord.HTTPException):
+                nickname_note = " I couldn't update your nickname; check Manage Nicknames and the bot's role position."
+                log.exception("Unable to update nickname after Roblox username lookup")
             data = load_data()
-            pending = data.setdefault(str(MAIN_GUILD_ID), {}).setdefault("roblox_verifications", {})
-            pending[str(interaction.user.id)] = {
-                "roblox_id": int(roblox_user["id"]), "username": roblox_user.get("name", username),
-                "code": code, "created_at": discord.utils.utcnow().isoformat()
+            guild_cfg = data.setdefault(str(MAIN_GUILD_ID), {})
+            guild_cfg.setdefault("verified_roblox_accounts", {})[str(interaction.user.id)] = {
+                "roblox_id": int(roblox_user["id"]),
+                "username": roblox_user.get("name", username),
+                "verification_type": "username_exists_only",
+                "verified_at": discord.utils.utcnow().isoformat()
             }
             save_data(data)
             await interaction.followup.send(
-                f"**Roblox account found:** {roblox_user.get('name', username)}\\n"
-                f"1. Open your Roblox profile.\\n2. Temporarily add this code to your About/Description: `{code}`\\n"
-                "3. Save your profile, then return here and press **Confirm Roblox**.\\n\\n"
-                "Never share your Roblox password or account cookie. You can remove the code after verification.",
+                f"Roblox username **{roblox_user.get('name', username)}** was found. You received **VERIFIED** and your nickname is now **{nickname}**.{nickname_note}\\n\\n"
+                "**Important:** this only confirms that the Roblox account exists. It does not prove that you own it.",
                 ephemeral=True
             )
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, discord.HTTPException):
@@ -1398,47 +1414,6 @@ class RobloxVerificationPanel(discord.ui.View):
     async def begin(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RobloxUsernameModal())
 
-    @discord.ui.button(label="Confirm Roblox", emoji="✅", style=discord.ButtonStyle.primary, custom_id="oman_roblox:confirm")
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID or not isinstance(interaction.user, discord.Member):
-            return await interaction.response.send_message("Use this panel in the main Oman Air server.", ephemeral=True)
-        data = load_data()
-        guild_cfg = data.setdefault(str(MAIN_GUILD_ID), {})
-        pending = guild_cfg.setdefault("roblox_verifications", {})
-        record = pending.get(str(interaction.user.id))
-        if not record:
-            return await interaction.response.send_message("Press **Verify Roblox Account** first and follow the private instructions.", ephemeral=True)
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            profile = await _roblox_json(f"https://users.roblox.com/v1/users/{int(record['roblox_id'])}")
-            if record["code"] not in str(profile.get("description", "")):
-                return await interaction.followup.send("I can't see your code in that Roblox profile description yet. Save it and press **Confirm Roblox** again.", ephemeral=True)
-            verified_role = discord.utils.get(interaction.guild.roles, name="VERIFIED")
-            if verified_role is None:
-                return await interaction.followup.send("The Discord role `VERIFIED` doesn't exist. Ask a server admin to create it.", ephemeral=True)
-            try:
-                await interaction.user.add_roles(verified_role, reason=f"Roblox account verified: {record.get('username')}")
-            except (discord.Forbidden, discord.HTTPException):
-                log.exception("Unable to assign VERIFIED role")
-                return await interaction.followup.send("Verification succeeded, but I couldn't assign VERIFIED. The bot needs Manage Roles and its role must be above VERIFIED.", ephemeral=True)
-            nickname = f"[ECO] {interaction.user.name} | VERIFIED"[:32]
-            nickname_note = ""
-            try:
-                await interaction.user.edit(nick=nickname, reason="Roblox account verified")
-            except (discord.Forbidden, discord.HTTPException):
-                nickname_note = " I couldn't update your nickname; check the bot's Manage Nicknames permission and role position."
-                log.exception("Unable to update verified member nickname")
-            guild_cfg.setdefault("verified_roblox_accounts", {})[str(interaction.user.id)] = {
-                "roblox_id": int(record["roblox_id"]), "username": record.get("username"),
-                "verified_at": discord.utils.utcnow().isoformat()
-            }
-            pending.pop(str(interaction.user.id), None)
-            save_data(data)
-            await interaction.followup.send(f"Verification successful! You received **VERIFIED** and your server nickname is now **{nickname}**.{nickname_note}", ephemeral=True)
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, discord.HTTPException):
-            log.exception("Roblox panel confirmation failed")
-            await interaction.followup.send("Roblox's verification service is unavailable right now. Please try again later.", ephemeral=True)
-
 @bot.tree.command(name="robloxpanel", description="Admin: publish the Roblox verification panel")
 @app_commands.default_permissions(administrator=True)
 async def robloxpanel(interaction: discord.Interaction):
@@ -1448,12 +1423,12 @@ async def robloxpanel(interaction: discord.Interaction):
         return await interaction.response.send_message("Only server administrators can publish this panel.", ephemeral=True)
     embed = discord.Embed(
         title="✈️ Oman Air | Roblox Member Verification",
-        description=("Welcome aboard! Verify your Roblox account to unlock the Oman Air community.\\n\\n"
+        description=("Welcome aboard! Check your Roblox username to unlock the Oman Air community.\\n\\n"
                      "**How it works**\\n"
                      "1. Press **Verify Roblox Account** and enter your Roblox username.\\n"
-                     "2. Add the private code to your Roblox profile About/Description.\\n"
-                     "3. Save your Roblox profile, then press **Confirm Roblox** below.\\n\\n"
-                     "Successful verification grants the **VERIFIED** role and updates your server nickname to `[ECO] Username | VERIFIED`."),
+                     "2. The bot checks Roblox to see whether that username exists.\\n"
+                     "3. If found, the bot saves the account details, grants **VERIFIED**, and updates your nickname.\\n\\n"
+                     "**Note:** this is an account-existence check only. It does not prove account ownership."),
         color=discord.Color.from_rgb(0, 45, 90)
     )
     embed.set_footer(text="Never share your Roblox password or account cookie.")
