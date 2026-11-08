@@ -775,12 +775,10 @@ async def announcement(interaction: discord.Interaction, title: str, message: st
     cfg = operations_data()
     if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured Oman Air staff can post announcements.", ephemeral=True)
-    target = channel
-    if target is None:
-        main_guild = bot.get_guild(MAIN_GUILD_ID)
-        target = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
+    main_guild = bot.get_guild(MAIN_GUILD_ID)
+    target = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
     if not isinstance(target, discord.TextChannel):
-        return await interaction.response.send_message("Please choose a channel or configure the announcement channel with /flightsetup.", ephemeral=True)
+        return await interaction.response.send_message("The configured main-server announcement channel is unavailable.", ephemeral=True)
     title = title.strip()[:256]
     message = message.strip()[:4000]
     if not title or not message:
@@ -791,13 +789,13 @@ async def announcement(interaction: discord.Interaction, title: str, message: st
         color=discord.Color.from_rgb(0, 45, 90),
         timestamp=discord.utils.utcnow()
     )
-    embed.set_author(name="OMAN AIR | OFFICIAL ANNOUNCEMENT", icon_url=interaction.guild.icon.url if interaction.guild.icon else discord.Embed.Empty)
-    embed.set_footer(text=f"{interaction.guild.name} • Oman Air Virtual Operations")
+    embed.set_author(name="OMAN AIR | OFFICIAL ANNOUNCEMENT", icon_url=main_guild.icon.url if main_guild and main_guild.icon else discord.Embed.Empty)
+    embed.set_footer(text="Oman Air • Official Main Server")
     try:
         await target.send(embed=embed)
     except discord.Forbidden:
         return await interaction.response.send_message("I cannot post in that channel. Check my channel permissions.", ephemeral=True)
-    await interaction.response.send_message(f"Professional announcement published in {target.mention}.", ephemeral=True)
+    await interaction.response.send_message(f"Professional announcement published in the main server: {target.mention}.", ephemeral=True)
 
 # ---------------- Passenger bookings, check-in, boarding, dashboard and staff ranks ----------------
 
@@ -1068,6 +1066,13 @@ async def flightbooking(interaction: discord.Interaction, flight_number: str, bo
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(channel="Channel where staff activity logs should be posted")
 async def stafflogsetup(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Run this command in the staff server.", ephemeral=True)
+    cfg = operations_data()
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured Oman Air staff can set the staff log channel.", ephemeral=True)
+    if channel.guild.id != STAFF_GUILD_ID:
+        return await interaction.response.send_message("Choose a channel in the staff server.", ephemeral=True)
     save_guild_config(STAFF_GUILD_ID, "staff_log_channel_id", channel.id)
     await interaction.response.send_message(f"Staff activity logs will be posted in {channel.mention}.", ephemeral=True)
 
