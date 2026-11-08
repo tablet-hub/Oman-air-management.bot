@@ -925,9 +925,38 @@ def get_flight(cfg: dict, flight_number: str):
 def get_booking(cfg: dict, reference: str):
     return cfg.get("bookings", {}).get(reference.strip().upper())
 
-async def process_flight_booking(interaction: discord.Interaction, flight_number: str):
+class FlightClassSelect(discord.ui.Select):
+    def __init__(self, flight_number: str):
+        self.flight_number = flight_number.upper()
+        options = [
+            discord.SelectOption(label="Economy Class", value="ECO", description="Requires the ECO role"),
+            discord.SelectOption(label="Business Class", value="BUSINESS", description="Requires the BUSINESS role"),
+            discord.SelectOption(label="First Class", value="FIRST", description="Requires the FIRST role"),
+        ]
+        super().__init__(placeholder="Choose your travel class…", min_values=1, max_values=1, options=options, custom_id=f"oman_flight_class:{self.flight_number}")
+
+    async def callback(self, interaction: discord.Interaction):
+        await process_flight_booking(interaction, self.flight_number, self.values[0])
+
+
+class FlightClassSelectView(discord.ui.View):
+    def __init__(self, flight_number: str):
+        super().__init__(timeout=180)
+        self.add_item(FlightClassSelect(flight_number))
+
+
+async def process_flight_booking(interaction: discord.Interaction, flight_number: str, flight_class: str = None):
     if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
         return await interaction.response.send_message("Use this button or command in the server.", ephemeral=True)
+    if flight_class is None:
+        return await interaction.response.send_message("Choose your travel class. I will verify your Discord role before booking.", view=FlightClassSelectView(flight_number), ephemeral=True)
+    if flight_class not in ("ECO", "BUSINESS", "FIRST"):
+        return await interaction.response.send_message("That travel class is not valid. Please try booking again.", ephemeral=True)
+    if not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("I could not verify your server roles. Please try again inside the main server.", ephemeral=True)
+    required_role = interaction.guild.get_role(next((role.id for role in interaction.guild.roles if role.name == flight_class), 0))
+    if not required_role or required_role not in interaction.user.roles:
+        return await interaction.response.send_message(f"❌ You selected **{flight_class} Class**, but you do not have the required **{flight_class}** role. Please choose a class matching your role.", ephemeral=True)
     data = load_data()
     cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     flight = get_flight(cfg, flight_number)
