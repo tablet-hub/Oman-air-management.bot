@@ -740,7 +740,7 @@ async def flight_cancel(interaction: discord.Interaction, flight_number: str, re
     if isinstance(channel, discord.TextChannel):
         embed = flight_embed(interaction.guild, flight, title=f"❌ OMAN AIR | FLIGHT CANCELLED — {flight['flight_number']}")
         embed.add_field(name="Cancellation reason", value=reason.strip()[:1024], inline=False)
-        await channel.send(embed=embed)
+        await channel.send(content="@everyone", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
     await interaction.response.send_message(f"Flight **{flight['flight_number']}** marked as cancelled.", ephemeral=True)
 
 @bot.tree.command(name="announcement", description="Staff: post a professional Oman Air announcement embed")
