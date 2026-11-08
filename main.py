@@ -2,6 +2,10 @@ import os
 import logging
 import json
 import uuid
+import asyncio
+import secrets
+import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import timedelta
 
@@ -1341,6 +1345,90 @@ async def staffactivity(interaction: discord.Interaction, limit: app_commands.Ra
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+# ---------------- Roblox account verification ----------------
+
+def _roblox_api_json(url, payload=None):
+    headers = {"User-Agent": "OmanAirDiscordBot/1.0", "Content-Type": "application/json"}
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST" if payload is not None else "GET")
+    with urllib.request.urlopen(request, timeout=12) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+async def _roblox_json(url, payload=None):
+    return await asyncio.to_thread(_roblox_api_json, url, payload)
+
+@bot.tree.command(name="robloxverify", description="Start Roblox account verification")
+@app_commands.describe(username="Your Roblox username (not your display name)")
+async def robloxverify(interaction: discord.Interaction, username: str):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Use Roblox verification in the main Oman Air server.", ephemeral=True)
+    username = username.strip()
+    if not username or len(username) > 20:
+        return await interaction.response.send_message("Enter a valid Roblox username.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        result = await _roblox_json("https://users.roblox.com/v1/usernames/users", {"usernames": [username], "excludeBannedUsers": True})
+        users = result.get("data", [])
+        if not users:
+            return await interaction.followup.send("I couldn't find that Roblox username. Check the spelling and try again.", ephemeral=True)
+        roblox_user = users[0]
+        code = "OMAN-" + secrets.token_hex(4).upper()
+        data = load_data()
+        guild_cfg = data.setdefault(str(MAIN_GUILD_ID), {})
+        pending = guild_cfg.setdefault("roblox_verifications", {})
+        pending[str(interaction.user.id)] = {
+            "roblox_id": int(roblox_user["id"]),
+            "username": roblox_user.get("name", username),
+            "code": code,
+            "created_at": discord.utils.utcnow().isoformat()
+        }
+        save_data(data)
+        await interaction.followup.send(
+            f"**Step 1:** Open your Roblox profile for **{roblox_user.get('name', username)}**.\n"
+            f"**Step 2:** Temporarily put this code in your profile About/Description: `{code}`\n"
+            "**Step 3:** Save your profile, then run `/robloxconfirm` here.\n\n"
+            "Do not share your Roblox password or cookie. You can remove the code after verification.",
+            ephemeral=True
+        )
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, discord.HTTPException):
+        log.exception("Roblox verification start failed")
+        await interaction.followup.send("Roblox's verification service couldn't be reached right now. Please try again later.", ephemeral=True)
+
+@bot.tree.command(name="robloxconfirm", description="Confirm your Roblox profile verification code")
+async def robloxconfirm(interaction: discord.Interaction):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this in the main Oman Air server.", ephemeral=True)
+    data = load_data()
+    guild_cfg = data.setdefault(str(MAIN_GUILD_ID), {})
+    pending = guild_cfg.setdefault("roblox_verifications", {})
+    record = pending.get(str(interaction.user.id))
+    if not record:
+        return await interaction.response.send_message("First run `/robloxverify` with your Roblox username.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    try:
+        profile = await _roblox_json(f"https://users.roblox.com/v1/users/{int(record['roblox_id'])}")
+        description = str(profile.get("description", ""))
+        if record["code"] not in description:
+            return await interaction.followup.send("I can't see your code in that Roblox profile description yet. Save it on Roblox, then try `/robloxconfirm` again.", ephemeral=True)
+        verified_role = discord.utils.get(interaction.guild.roles, name="VERIFIED")
+        if verified_role is None:
+            return await interaction.followup.send("The Discord role `VERIFIED` doesn't exist yet. Ask a server admin to create it.", ephemeral=True)
+        try:
+            await interaction.user.add_roles(verified_role, reason=f"Roblox account verified: {record.get('username')}")
+        except (discord.Forbidden, discord.HTTPException):
+            log.exception("Unable to assign VERIFIED role")
+            return await interaction.followup.send("I verified your Roblox profile, but can't assign the VERIFIED role. Admins must give the bot Manage Roles and place its role above VERIFIED.", ephemeral=True)
+        guild_cfg.setdefault("verified_roblox_accounts", {})[str(interaction.user.id)] = {
+            "roblox_id": int(record["roblox_id"]), "username": record.get("username"),
+            "verified_at": discord.utils.utcnow().isoformat()
+        }
+        pending.pop(str(interaction.user.id), None)
+        save_data(data)
+        await interaction.followup.send(f"Verification successful! **{record.get('username')}** is linked and you received the **VERIFIED** role.", ephemeral=True)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, KeyError, discord.HTTPException):
+        log.exception("Roblox verification confirmation failed")
+        await interaction.followup.send("Roblox's verification service couldn't be reached right now. Please try again later.", ephemeral=True)
+
 bot.tree.add_command(flight_group)
 
 # ---------------- SkyMiles Shop Panel ----------------
@@ -1451,5 +1539,20 @@ async def on_ready():
     log.info("Bot connected as %s (%s)", bot.user, bot.user.id)
     log.info("Connected guilds: %s", [g.id for g in bot.guilds])
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Oman Air Support ✈️"))
+
+# Main-server app commands are limited to verification until a member has VERIFIED.
+@bot.tree.interaction_check
+async def require_roblox_verification(interaction: discord.Interaction) -> bool:
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return True
+    if interaction.command and interaction.command.name in {"robloxverify", "robloxconfirm"}:
+        return True
+    if isinstance(interaction.user, discord.Member) and discord.utils.get(interaction.user.roles, name="VERIFIED"):
+        return True
+    if interaction.response.is_done():
+        await interaction.followup.send("You must complete Roblox verification first with `/robloxverify` and `/robloxconfirm`.", ephemeral=True)
+    else:
+        await interaction.response.send_message("You must complete Roblox verification first with `/robloxverify` and `/robloxconfirm`.", ephemeral=True)
+    return False
 
 bot.run(TOKEN)
