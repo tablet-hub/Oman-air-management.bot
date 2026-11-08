@@ -1041,7 +1041,20 @@ async def flightdashboard(interaction: discord.Interaction):
     embed.add_field(name="Boarded", value=str(sum(bool(b.get("boarded")) for b in bookings)), inline=True)
     for f in active[:20]:
         flight_bookings = [b for b in bookings if b.get("flight_number") == f["flight_number"] and b.get("status") != "Cancelled"]
-        embed.add_field(name=f"{f['flight_number']} • {f.get('status', 'Scheduled')}", value=f"{f['origin']} ➜ {f['destination']}\nDeparture: {f.get('departure', 'TBA')} • Gate: {f.get('gate', 'TBA')}\nPassengers: {len(flight_bookings)}/{f.get('capacity', 180)}", inline=False)
+        passenger_lines = [f"• <@{b.get('passenger_id')}> — {b.get('status', 'Booked')}" for b in flight_bookings if b.get("passenger_id")]
+        passenger_text = "\n".join(passenger_lines) if passenger_lines else "No passengers booked yet."
+        if len(passenger_text) > 850:
+            shown_lines = []
+            used = 0
+            for line in passenger_lines:
+                if used + len(line) + 1 > 800:
+                    break
+                shown_lines.append(line)
+                used += len(line) + 1
+            remaining = len(passenger_lines) - len(shown_lines)
+            passenger_text = "\n".join(shown_lines) + f"\n…and {remaining} more passenger(s)." if remaining else "\n".join(shown_lines)
+        dashboard_value = f"{f['origin']} ➜ {f['destination']}\nDeparture: {f.get('departure', 'TBA')} • Gate: {f.get('gate', 'TBA')}\nPassengers: {len(flight_bookings)}/{f.get('capacity', 180)}\n\n**Passenger names:**\n{passenger_text}"
+        embed.add_field(name=f"{f['flight_number']} • {f.get('status', 'Scheduled')}", value=dashboard_value[:1024], inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="flightbooking", description="Staff: open or close bookings for a flight")
