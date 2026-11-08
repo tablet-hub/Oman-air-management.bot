@@ -21,6 +21,8 @@ DATA_PATH = Path("tickets.json")
 
 # Add consistent Oman Air branding to every message sent by the bot.
 BRAND_SIGNATURE = "Oman Air • A world of possibilities • a oneworld partner"
+OMAN_AIR_LOGO_URL = "https://commons.wikimedia.org/wiki/Special:FilePath/Oman_Air_logo.png"
+ONEWORLD_LOGO_URL = "https://commons.wikimedia.org/wiki/Special:FilePath/Oneworld_logo.svg"
 
 def _brand_message_kwargs(kwargs):
     kwargs = dict(kwargs)
@@ -29,12 +31,12 @@ def _brand_message_kwargs(kwargs):
         kwargs["content"] = content + "\n\n" + BRAND_SIGNATURE
     embed = kwargs.get("embed")
     if isinstance(embed, discord.Embed):
-        embed.set_footer(text=BRAND_SIGNATURE)
+        embed.set_footer(text="Oman Air", icon_url=OMAN_AIR_LOGO_URL)\n        embed.set_author(name="A oneworld partner", icon_url=ONEWORLD_LOGO_URL)
     embeds = kwargs.get("embeds")
     if embeds:
         for item in embeds:
             if isinstance(item, discord.Embed):
-                item.set_footer(text=BRAND_SIGNATURE)
+                item.set_footer(text="Oman Air", icon_url=OMAN_AIR_LOGO_URL)\n                item.set_author(name="A oneworld partner", icon_url=ONEWORLD_LOGO_URL)
     return kwargs
 
 _original_messageable_send = discord.abc.Messageable.send
