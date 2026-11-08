@@ -12,7 +12,8 @@ from datetime import timedelta
 import discord
 from discord import app_commands
 from discord.ext import commands
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("oman-air")
@@ -23,9 +24,9 @@ STAFF_GUILD_ID = int(os.getenv("STAFF_GUILD_ID", "1552678194996449394") or "1552
 MAIN_GUILD_ID = int(os.getenv("MAIN_GUILD_ID", "1552773061894348952") or "1552773061894348952")
 MAIN_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("MAIN_ANNOUNCEMENT_CHANNEL_ID", "1554496632890986498") or "1554496632890986498")
 DATA_PATH = Path("tickets.json")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.5")
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+gemini_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 CHAT_HISTORY = {}
 
 # Add consistent Oman Air branding to every message sent by the bot.
@@ -1372,35 +1373,36 @@ async def ask_oman_air(interaction: discord.Interaction, question: str):
     question = question.strip()
     if not question or len(question) > 1200:
         return await interaction.response.send_message("Please enter a question of 1–1,200 characters.", ephemeral=True)
-    if openai_client is None:
+    if gemini_client is None:
         return await interaction.response.send_message(
-            "The AI assistant is not configured yet. A server administrator needs to add the OPENAI_API_KEY variable in Railway.",
+            "The AI assistant is not configured yet. A server administrator needs to add the GEMINI_API_KEY variable in Railway.",
             ephemeral=True
         )
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     history_key = (interaction.guild.id, interaction.user.id)
     history = CHAT_HISTORY.get(history_key, [])
-    conversation = history[-8:] + [{"role": "user", "content": question}]
+    conversation = history[-8:] + [{"role": "user", "parts": [{"text": question}]}]
 
     try:
-        response = await openai_client.responses.create(
-            model=OPENAI_MODEL,
-            instructions=CHATBOT_INSTRUCTIONS,
-            input=conversation,
-            max_output_tokens=450
+        response = await gemini_client.aio.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=conversation,
+            config=types.GenerateContentConfig(
+                system_instruction=CHATBOT_INSTRUCTIONS,
+                max_output_tokens=450
+            )
         )
-        answer = (response.output_text or "").strip()
+        answer = (response.text or "").strip()
         if not answer:
             answer = "I couldn't create an answer just now. Please try again."
         CHAT_HISTORY[history_key] = (history + [
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": answer}
+            {"role": "user", "parts": [{"text": question}]},
+            {"role": "model", "parts": [{"text": answer}]}
         ])[-10:]
-        # Discord message limit is 2,000 characters.
         await interaction.followup.send(answer[:1900], ephemeral=True)
     except Exception:
-        log.exception("Oman Air AI chatbot request failed")
+        log.exception("Oman Air Gemini chatbot request failed")
         await interaction.followup.send(
             "Sorry, the AI assistant is temporarily unavailable. Please try again later or contact staff.",
             ephemeral=True
