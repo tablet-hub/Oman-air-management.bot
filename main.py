@@ -793,30 +793,44 @@ async def flight_cancel(interaction: discord.Interaction, flight_number: str, re
         await channel.send(content="@everyone", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
     await interaction.response.send_message(f"Flight **{flight['flight_number']}** marked as cancelled.", ephemeral=True)
 
-@bot.tree.command(name="announcement", description="Staff: post a professional Oman Air announcement embed")
-@app_commands.describe(title="Announcement heading", message="Announcement details", channel="Choose any text channel in the staff server (defaults to this channel)")
+@bot.tree.command(name="announcement", description="Staff: post a professional Oman Air announcement in the main server")
+@app_commands.describe(title="Announcement heading", message="Announcement details", channel="Any text channel in the main server (defaults to this channel)")
 async def announcement(interaction: discord.Interaction, title: str, message: str, channel: discord.TextChannel = None):
-    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
-        return await interaction.response.send_message("Use this command in the staff server.", ephemeral=True)
-    cfg = operations_data()
-    if not staff_member(interaction.user, cfg):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Run this command in the main server and choose a channel there.", ephemeral=True)
+    if not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("This command is only available to server members.", ephemeral=True)
+
+    staff_guild = bot.get_guild(STAFF_GUILD_ID)
+    if staff_guild is None:
+        return await interaction.response.send_message("The Oman Air staff server is unavailable to the bot.", ephemeral=True)
+    try:
+        staff_member_obj = staff_guild.get_member(interaction.user.id) or await staff_guild.fetch_member(interaction.user.id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return await interaction.response.send_message("You must be a member of the Oman Air staff server to publish announcements.", ephemeral=True)
+
+    staff_cfg = guild_data(STAFF_GUILD_ID)
+    if not staff_member(staff_member_obj, staff_cfg):
         return await interaction.response.send_message("Only configured Oman Air staff can post announcements.", ephemeral=True)
+
     target = channel or interaction.channel
-    if not isinstance(target, discord.TextChannel) or target.guild.id != STAFF_GUILD_ID:
-        return await interaction.response.send_message("Choose a text channel in the staff server.", ephemeral=True)
+    if not isinstance(target, discord.TextChannel) or target.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Choose any text channel in the main server.", ephemeral=True)
+
     title = title.strip()[:256]
     message = message.strip()[:4000]
     if not title or not message:
         return await interaction.response.send_message("The title and message cannot be empty.", ephemeral=True)
-    staff_guild = interaction.guild
+
+    main_guild = interaction.guild
     embed = discord.Embed(
         title=f"📢 {title}",
         description=message,
         color=discord.Color.from_rgb(0, 45, 90),
         timestamp=discord.utils.utcnow()
     )
-    embed.set_author(name="OMAN AIR | OFFICIAL ANNOUNCEMENT", icon_url=staff_guild.icon.url if staff_guild.icon else discord.Embed.Empty)
-    embed.set_footer(text=f"Oman Air • {staff_guild.name}")
+    embed.set_author(name="OMAN AIR | OFFICIAL ANNOUNCEMENT", icon_url=main_guild.icon.url if main_guild.icon else discord.Embed.Empty)
+    embed.set_footer(text=f"Oman Air • {main_guild.name}")
     try:
         await target.send(embed=embed)
     except discord.Forbidden:
