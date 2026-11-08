@@ -975,10 +975,11 @@ async def process_flight_booking(interaction: discord.Interaction, flight_number
     if taken >= capacity:
         return await interaction.response.send_message("This flight is fully booked.", ephemeral=True)
     reference = ("WY" + uuid.uuid4().hex[:8]).upper()
-    record = {"reference": reference, "flight_number": flight["flight_number"], "passenger_id": interaction.user.id, "status": "Booked", "booked_at": discord.utils.utcnow().isoformat(), "checked_in": False, "boarded": False}
+    record = {"reference": reference, "flight_number": flight["flight_number"], "passenger_id": interaction.user.id, "status": "Booked", "class": flight_class, "booked_at": discord.utils.utcnow().isoformat(), "checked_in": False, "boarded": False}
     bookings[reference] = record
     save_data(data)
     embed = discord.Embed(title="🎟️ Oman Air | Booking Confirmation", description=f"**Booking reference:** {reference}\n**Passenger:** {interaction.user.mention}\n**Flight:** {flight['flight_number']}\n**Route:** {flight['origin']} ➜ {flight['destination']}", color=discord.Color.from_rgb(0, 45, 90))
+    embed.add_field(name="Travel Class", value=flight_class, inline=True)
     embed.add_field(name="🧳 Check-in", value=flight.get("check_in", "TBA"), inline=False)
     embed.add_field(name="🛫 Departure", value=flight.get("departure", "TBA"), inline=True)
     embed.add_field(name="🛬 Arrival", value=flight.get("arrival", "TBA"), inline=True)
