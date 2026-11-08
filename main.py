@@ -1005,10 +1005,10 @@ async def setup_views():
     bot.add_view(TicketPanel())
     bot.add_view(TicketControls())
     bot.add_view(TicketStaffTools())
-    # Register each flight's persistent Book Flight button after bot restarts.
-    for guild in bot.guilds:
-        for flight in guild_data(guild.id).get("flights", {}).values():
-            bot.add_view(BookFlightView(flight["flight_number"]))
+    # Register persistent booking buttons from saved flights before Discord connects.
+    cfg = load_data().get(str(GUILD_ID), {})
+    for flight in cfg.get("flights", {}).values():
+        bot.add_view(BookFlightView(flight["flight_number"]))
 
 # Ensure classes/commands are defined before the bot starts.
 _original_setup_hook = bot.setup_hook
