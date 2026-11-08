@@ -607,12 +607,11 @@ class BookFlightView(discord.ui.View):
 
 
 async def post_flight_announcement(guild: discord.Guild, flight: dict):
-    cfg = guild_data(guild.id)
-    channel_id = cfg.get("flight_announcement_channel_id")
-    channel = guild.get_channel(channel_id) if channel_id else None
+    main_guild = bot.get_guild(MAIN_GUILD_ID)
+    channel = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
     if not isinstance(channel, discord.TextChannel):
         return False
-    await channel.send(content="@everyone", embed=flight_embed(guild, flight), view=BookFlightView(flight["flight_number"]), allowed_mentions=discord.AllowedMentions(everyone=True))
+    await channel.send(content="@everyone", embed=flight_embed(main_guild, flight), view=BookFlightView(flight["flight_number"]), allowed_mentions=discord.AllowedMentions(everyone=True))
     return True
 
 @bot.tree.command(name="clear", description="Staff: clear recent messages from this channel")
