@@ -711,6 +711,38 @@ async def flight_cancel(interaction: discord.Interaction, flight_number: str, re
         await channel.send(embed=embed)
     await interaction.response.send_message(f"Flight **{flight['flight_number']}** marked as cancelled.", ephemeral=True)
 
+@bot.tree.command(name="announcement", description="Staff: post a professional Oman Air announcement embed")
+@app_commands.describe(title="Announcement heading", message="Announcement details", channel="Channel to publish in (optional)")
+async def announcement(interaction: discord.Interaction, title: str, message: str, channel: discord.TextChannel = None):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
+    cfg = guild_data(interaction.guild.id)
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured Oman Air staff can post announcements.", ephemeral=True)
+    target = channel
+    if target is None:
+        channel_id = cfg.get("flight_announcement_channel_id")
+        target = interaction.guild.get_channel(channel_id) if channel_id else None
+    if not isinstance(target, discord.TextChannel):
+        return await interaction.response.send_message("Please choose a channel or configure the announcement channel with /flightsetup.", ephemeral=True)
+    title = title.strip()[:256]
+    message = message.strip()[:4000]
+    if not title or not message:
+        return await interaction.response.send_message("The title and message cannot be empty.", ephemeral=True)
+    embed = discord.Embed(
+        title=f"📢 {title}",
+        description=message,
+        color=discord.Color.from_rgb(0, 45, 90),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name="OMAN AIR | OFFICIAL ANNOUNCEMENT", icon_url=interaction.guild.icon.url if interaction.guild.icon else discord.Embed.Empty)
+    embed.set_footer(text=f"{interaction.guild.name} • Oman Air Virtual Operations")
+    try:
+        await target.send(embed=embed)
+    except discord.Forbidden:
+        return await interaction.response.send_message("I cannot post in that channel. Check my channel permissions.", ephemeral=True)
+    await interaction.response.send_message(f"Professional announcement published in {target.mention}.", ephemeral=True)
+
 bot.tree.add_command(flight_group)
 
 # Persistent component views are registered at startup.
