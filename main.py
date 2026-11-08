@@ -794,34 +794,37 @@ async def flight_cancel(interaction: discord.Interaction, flight_number: str, re
     await interaction.response.send_message(f"Flight **{flight['flight_number']}** marked as cancelled.", ephemeral=True)
 
 @bot.tree.command(name="announcement", description="Staff: post a professional Oman Air announcement embed")
-@app_commands.describe(title="Announcement heading", message="Announcement details", channel="Channel to publish in (optional)")
+@app_commands.describe(title="Announcement heading", message="Announcement details", channel="Choose any text channel in the staff server (defaults to this channel)")
 async def announcement(interaction: discord.Interaction, title: str, message: str, channel: discord.TextChannel = None):
     if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
-        return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
+        return await interaction.response.send_message("Use this command in the staff server.", ephemeral=True)
     cfg = operations_data()
-    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
+    if not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured Oman Air staff can post announcements.", ephemeral=True)
-    main_guild = bot.get_guild(MAIN_GUILD_ID)
-    target = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
-    if not isinstance(target, discord.TextChannel):
-        return await interaction.response.send_message("The configured main-server announcement channel is unavailable.", ephemeral=True)
+    target = channel or interaction.channel
+    if not isinstance(target, discord.TextChannel) or target.guild.id != STAFF_GUILD_ID:
+        return await interaction.response.send_message("Choose a text channel in the staff server.", ephemeral=True)
     title = title.strip()[:256]
     message = message.strip()[:4000]
     if not title or not message:
         return await interaction.response.send_message("The title and message cannot be empty.", ephemeral=True)
+    staff_guild = interaction.guild
     embed = discord.Embed(
         title=f"📢 {title}",
         description=message,
         color=discord.Color.from_rgb(0, 45, 90),
         timestamp=discord.utils.utcnow()
     )
-    embed.set_author(name="OMAN AIR | OFFICIAL ANNOUNCEMENT", icon_url=main_guild.icon.url if main_guild and main_guild.icon else discord.Embed.Empty)
-    embed.set_footer(text="Oman Air • Official Main Server")
+    embed.set_author(name="OMAN AIR | OFFICIAL ANNOUNCEMENT", icon_url=staff_guild.icon.url if staff_guild.icon else discord.Embed.Empty)
+    embed.set_footer(text=f"Oman Air • {staff_guild.name}")
     try:
         await target.send(embed=embed)
     except discord.Forbidden:
         return await interaction.response.send_message("I cannot post in that channel. Check my channel permissions.", ephemeral=True)
-    await interaction.response.send_message(f"Professional announcement published in the main server: {target.mention}.", ephemeral=True)
+    except discord.HTTPException:
+        log.exception("Failed to send announcement to channel %s", target.id)
+        return await interaction.response.send_message("Discord couldn't publish the announcement. Please try again.", ephemeral=True)
+    await interaction.response.send_message(f"Professional announcement published in {target.mention}.", ephemeral=True)
 
 # ---------------- Passenger bookings, check-in, boarding, dashboard and staff ranks ----------------
 
