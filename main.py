@@ -14,6 +14,9 @@ log = logging.getLogger("oman-air")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID", "0") or "0")
+STAFF_GUILD_ID = int(os.getenv("STAFF_GUILD_ID", "1552678194996449394") or "1552678194996449394")
+MAIN_GUILD_ID = int(os.getenv("MAIN_GUILD_ID", "1552773061894348952") or "1552773061894348952")
+MAIN_ANNOUNCEMENT_CHANNEL_ID = int(os.getenv("MAIN_ANNOUNCEMENT_CHANNEL_ID", "1554496632890986498") or "1554496632890986498")
 DATA_PATH = Path("tickets.json")
 
 if not TOKEN:
@@ -37,6 +40,10 @@ def save_data(data):
 
 def guild_data(guild_id):
     return load_data().setdefault(str(guild_id), {})
+
+def operations_data(data=None):
+    store = data if data is not None else load_data()
+    return store.setdefault(str(STAFF_GUILD_ID), {})
 
 def staff_member(member: discord.Member, cfg: dict) -> bool:
     role = member.guild.get_role(cfg.get("staff_role_id", 0))
@@ -632,8 +639,11 @@ async def clear(interaction: discord.Interaction, amount: app_commands.Range[int
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(channel="Channel for official flight announcements")
 async def flightsetup(interaction: discord.Interaction, channel: discord.TextChannel):
-    save_guild_config(interaction.guild_id, "flight_announcement_channel_id", channel.id)
-    await interaction.response.send_message(f"Official flight announcements will be posted in {channel.mention}.", ephemeral=True)
+    if interaction.guild_id != STAFF_GUILD_ID:
+        return await interaction.response.send_message("Run this setup command in the staff server.", ephemeral=True)
+    if channel.guild.id != MAIN_GUILD_ID or channel.id != MAIN_ANNOUNCEMENT_CHANNEL_ID:
+        return await interaction.response.send_message("The announcement channel is fixed to the configured main-server channel.", ephemeral=True)
+    await interaction.response.send_message(f"Main-server flight announcements are configured for {channel.mention}.", ephemeral=True)
 
 @flight_group.command(name="create", description="Create and publish a professional flight announcement")
 @app_commands.default_permissions(manage_guild=True)
@@ -648,10 +658,12 @@ async def flightsetup(interaction: discord.Interaction, channel: discord.TextCha
     gate="Departure gate or TBA"
 )
 async def flight_create(interaction: discord.Interaction, flight_number: str, origin: str, destination: str, departure: str, arrival: str, aircraft: str, check_in: str = "TBA", gate: str = "TBA"):
-    if not interaction.guild:
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID:
         return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    if interaction.guild.id != STAFF_GUILD_ID:
+        return await interaction.response.send_message("Flight management is only available in the staff server.", ephemeral=True)
     data = load_data()
-    cfg = data.setdefault(str(interaction.guild.id), {})
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     flights = cfg.setdefault("flights", {})
     flight_number = flight_number.strip().upper()
     if flight_number in flights and flights[flight_number].get("status") not in ("Cancelled", "Completed"):
@@ -679,10 +691,10 @@ async def flight_create(interaction: discord.Interaction, flight_number: str, or
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.describe(flight_number="Flight to update", status="New status", gate="New gate (optional)")
 async def flightupdate(interaction: discord.Interaction, flight_number: str, status: str, gate: str = ""):
-    if not interaction.guild:
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID:
         return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
     data = load_data()
-    cfg = data.setdefault(str(interaction.guild.id), {})
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     flights = cfg.setdefault("flights", {})
     key = flight_number.strip().upper()
     flight = flights.get(key)
@@ -708,11 +720,11 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
                 booking["skymiles_awarded_at"] = discord.utils.utcnow().isoformat()
                 miles_awarded_now += 1
     save_data(data)
-    channel_id = cfg.get("flight_announcement_channel_id")
-    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+    main_guild = bot.get_guild(MAIN_GUILD_ID)
+    channel = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
     if not isinstance(channel, discord.TextChannel):
-        return await interaction.response.send_message("Flight updated in storage, but announcement channel is not configured. Run /flightsetup.", ephemeral=True)
-    embed = flight_embed(interaction.guild, flight, title=f"📣 OMAN AIR | FLIGHT UPDATE — {key}")
+        return await interaction.response.send_message("Main-server announcement channel is unavailable. Check the bot is in both servers and can post there.", ephemeral=True)
+    embed = flight_embed(main_guild, flight, title=f"📣 OMAN AIR | FLIGHT UPDATE — {key}")
     await channel.send(content="@everyone", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
     miles_note = f" Awarded 1,000 SkyMiles to {miles_awarded_now} passenger(s)." if miles_awarded_now else ""
     await interaction.response.send_message(f"Published update for **{key}**: **{normalized}**.{miles_note}", ephemeral=True)
@@ -720,9 +732,11 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
 @flight_group.command(name="list", description="List scheduled flights")
 @app_commands.default_permissions(manage_guild=True)
 async def flight_list(interaction: discord.Interaction):
-    if not interaction.guild:
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID:
         return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
-    flights = guild_data(interaction.guild.id).get("flights", {})
+    if interaction.guild.id != STAFF_GUILD_ID:
+        return await interaction.response.send_message("Flight management is only available in the staff server.", ephemeral=True)
+    flights = operations_data().get("flights", {})
     active = [f for f in flights.values() if f.get("status") not in ("Cancelled", "Arrived")]
     if not active:
         return await interaction.response.send_message("There are no active flights recorded.", ephemeral=True)
@@ -735,10 +749,10 @@ async def flight_list(interaction: discord.Interaction):
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.describe(flight_number="Flight to cancel", reason="Cancellation reason")
 async def flight_cancel(interaction: discord.Interaction, flight_number: str, reason: str):
-    if not interaction.guild:
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID:
         return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
     data = load_data()
-    cfg = data.setdefault(str(interaction.guild.id), {})
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     flight = cfg.setdefault("flights", {}).get(flight_number.strip().upper())
     if not flight:
         return await interaction.response.send_message("That flight was not found.", ephemeral=True)
@@ -746,10 +760,10 @@ async def flight_cancel(interaction: discord.Interaction, flight_number: str, re
     flight["cancellation_reason"] = reason.strip()[:500]
     flight["updated_at"] = discord.utils.utcnow().isoformat()
     save_data(data)
-    channel_id = cfg.get("flight_announcement_channel_id")
-    channel = interaction.guild.get_channel(channel_id) if channel_id else None
+    main_guild = bot.get_guild(MAIN_GUILD_ID)
+    channel = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
     if isinstance(channel, discord.TextChannel):
-        embed = flight_embed(interaction.guild, flight, title=f"❌ OMAN AIR | FLIGHT CANCELLED — {flight['flight_number']}")
+        embed = flight_embed(main_guild, flight, title=f"❌ OMAN AIR | FLIGHT CANCELLED — {flight['flight_number']}")
         embed.add_field(name="Cancellation reason", value=reason.strip()[:1024], inline=False)
         await channel.send(content="@everyone", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
     await interaction.response.send_message(f"Flight **{flight['flight_number']}** marked as cancelled.", ephemeral=True)
@@ -757,15 +771,15 @@ async def flight_cancel(interaction: discord.Interaction, flight_number: str, re
 @bot.tree.command(name="announcement", description="Staff: post a professional Oman Air announcement embed")
 @app_commands.describe(title="Announcement heading", message="Announcement details", channel="Channel to publish in (optional)")
 async def announcement(interaction: discord.Interaction, title: str, message: str, channel: discord.TextChannel = None):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured Oman Air staff can post announcements.", ephemeral=True)
     target = channel
     if target is None:
-        channel_id = cfg.get("flight_announcement_channel_id")
-        target = interaction.guild.get_channel(channel_id) if channel_id else None
+        main_guild = bot.get_guild(MAIN_GUILD_ID)
+        target = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
     if not isinstance(target, discord.TextChannel):
         return await interaction.response.send_message("Please choose a channel or configure the announcement channel with /flightsetup.", ephemeral=True)
     title = title.strip()[:256]
@@ -796,7 +810,7 @@ def audit_store(cfg: dict) -> list:
 
 async def audit_log(guild: discord.Guild, actor: discord.abc.User, action: str, details: str):
     data = load_data()
-    cfg = data.setdefault(str(guild.id), {})
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     audit_store(cfg).append({
         "actor_id": actor.id,
         "action": action[:100],
@@ -823,10 +837,10 @@ def get_booking(cfg: dict, reference: str):
     return cfg.get("bookings", {}).get(reference.strip().upper())
 
 async def process_flight_booking(interaction: discord.Interaction, flight_number: str):
-    if not interaction.guild:
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
         return await interaction.response.send_message("Use this button or command in the server.", ephemeral=True)
     data = load_data()
-    cfg = data.setdefault(str(interaction.guild.id), {})
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     flight = get_flight(cfg, flight_number)
     if not flight:
         return await interaction.response.send_message("That flight was not found. Check the flight number.", ephemeral=True)
@@ -866,10 +880,10 @@ async def bookflight(interaction: discord.Interaction, flight_number: str):
     await process_flight_booking(interaction, flight_number)
 
 async def process_flight_checkin(interaction: discord.Interaction, flight_number: str):
-    if not interaction.guild:
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
         return await interaction.response.send_message("Use this button in the server.", ephemeral=True)
     data = load_data()
-    cfg = data.setdefault(str(interaction.guild.id), {})
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     flight = get_flight(cfg, flight_number)
     if not flight or not flight.get("checkin_open"):
         return await interaction.response.send_message("Check-in is not currently open for this flight.", ephemeral=True)
@@ -912,26 +926,24 @@ class CheckInFlightView(discord.ui.View):
 @bot.tree.command(name="checkinstart", description="Staff: announce check-in opening for a flight with a Check In button")
 @app_commands.describe(flight_number="Flight number", channel="Channel for the check-in announcement (optional)")
 async def checkinstart(interaction: discord.Interaction, flight_number: str, channel: discord.TextChannel = None):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured Oman Air staff can open check-in.", ephemeral=True)
     flight = get_flight(cfg, flight_number)
     if not flight:
         return await interaction.response.send_message("Flight not found. Check the flight number.", ephemeral=True)
     if flight.get("status") in ("Cancelled", "Departed", "Arrived"):
         return await interaction.response.send_message("Check-in cannot be opened for this flight status.", ephemeral=True)
-    target = channel
-    if target is None:
-        channel_id = cfg.get("flight_announcement_channel_id")
-        target = interaction.guild.get_channel(channel_id) if channel_id else None
+    main_guild = bot.get_guild(MAIN_GUILD_ID)
+    target = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
     if not isinstance(target, discord.TextChannel):
-        return await interaction.response.send_message("Choose a channel or configure /flightsetup first.", ephemeral=True)
+        return await interaction.response.send_message("The configured main-server announcement channel is unavailable.", ephemeral=True)
     flight["checkin_open"] = True
     flight["checkin_opened_at"] = discord.utils.utcnow().isoformat()
     data = load_data()
-    data.setdefault(str(interaction.guild.id), {}).setdefault("flights", {})[flight["flight_number"]] = flight
+    data.setdefault(str(STAFF_GUILD_ID), {}).setdefault("flights", {})[flight["flight_number"]] = flight
     save_data(data)
     embed = discord.Embed(title="🛂 OMAN AIR | CHECK-IN NOW OPEN", description=f"Check-in has started for **{flight['flight_number']}**\n**Route:** {flight['origin']} ➜ {flight['destination']}\n**Check-in:** {flight.get('check_in', 'TBA')}\n**Departure:** {flight.get('departure', 'TBA')}\n\nPassengers who booked this flight, press **Check In** below. The bot will verify your booking automatically and privately issue your boarding pass.", color=discord.Color.from_rgb(0, 45, 90), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"{interaction.guild.name} • Oman Air Virtual Operations")
@@ -942,10 +954,10 @@ async def checkinstart(interaction: discord.Interaction, flight_number: str, cha
 @bot.tree.command(name="manifest", description="Staff: view the passenger manifest for a flight")
 @app_commands.describe(flight_number="Flight number")
 async def manifest(interaction: discord.Interaction, flight_number: str):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured staff can view passenger manifests.", ephemeral=True)
     flight = get_flight(cfg, flight_number)
     if not flight:
@@ -961,10 +973,10 @@ async def manifest(interaction: discord.Interaction, flight_number: str):
 @bot.tree.command(name="boardpassenger", description="Staff: mark a checked-in passenger as boarded")
 @app_commands.describe(booking_reference="Passenger booking reference")
 async def boardpassenger(interaction: discord.Interaction, booking_reference: str):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured staff can manage boarding.", ephemeral=True)
     booking = get_booking(cfg, booking_reference)
     if not booking:
@@ -977,16 +989,16 @@ async def boardpassenger(interaction: discord.Interaction, booking_reference: st
     booking["boarded_at"] = discord.utils.utcnow().isoformat()
     booking["status"] = "Boarded"
     data = load_data()
-    data.setdefault(str(interaction.guild.id), {}).setdefault("bookings", {})[booking["reference"]] = booking
+    data.setdefault(str(STAFF_GUILD_ID), {}).setdefault("bookings", {})[booking["reference"]] = booking
     save_data(data)
     await audit_log(interaction.guild, interaction.user, "Passenger boarded", f"Flight {booking['flight_number']} • Booking {booking['reference']} • Passenger <@{booking['passenger_id']}>")
     await interaction.response.send_message(f"Passenger <@{booking['passenger_id']}> marked as boarded for **{booking['flight_number']}**.", ephemeral=True)
 
 @bot.tree.command(name="mymiles", description="Member: view your Oman Air SkyMiles balance")
 async def mymiles(interaction: discord.Interaction):
-    if not interaction.guild:
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
         return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
+    cfg = operations_data()
     balance = int(cfg.get("skymiles", {}).get(str(interaction.user.id), 0))
     embed = discord.Embed(title="💳 Oman Air | SkyMiles", description=f"{interaction.user.mention}, you have **{balance:,} SkyMiles**.", color=discord.Color.from_rgb(0, 45, 90))
     embed.set_footer(text="Earn 1,000 SkyMiles when a flight you booked is marked Arrived.")
@@ -996,10 +1008,10 @@ async def mymiles(interaction: discord.Interaction):
 @bot.tree.command(name="milesadjust", description="Staff: add or remove SkyMiles from a passenger account")
 @app_commands.describe(member="Passenger account", amount="Miles to add or remove (positive or negative)", reason="Reason for the adjustment")
 async def milesadjust(interaction: discord.Interaction, member: discord.Member, amount: app_commands.Range[int, -1000000, 1000000], reason: str):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured Oman Air staff can adjust SkyMiles.", ephemeral=True)
     balances = cfg.setdefault("skymiles", {})
     key = str(member.id)
@@ -1009,7 +1021,7 @@ async def milesadjust(interaction: discord.Interaction, member: discord.Member, 
         return await interaction.response.send_message("That adjustment would make the passenger's balance negative.", ephemeral=True)
     balances[key] = updated
     data = load_data()
-    data.setdefault(str(interaction.guild.id), {})["skymiles"] = balances
+    data.setdefault(str(STAFF_GUILD_ID), {})["skymiles"] = balances
     save_data(data)
     await audit_log(interaction.guild, interaction.user, "SkyMiles adjusted", f"{amount:+,} miles for {member} ({member.id}). Reason: {reason.strip()[:300]}")
     await interaction.response.send_message(f"Updated {member.mention}'s balance: **{updated:,} SkyMiles** ({amount:+,}).", ephemeral=True)
@@ -1017,10 +1029,10 @@ async def milesadjust(interaction: discord.Interaction, member: discord.Member, 
 
 @bot.tree.command(name="flightdashboard", description="Staff: view the Oman Air flight operations dashboard")
 async def flightdashboard(interaction: discord.Interaction):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured staff can view the operations dashboard.", ephemeral=True)
     flights = list(cfg.get("flights", {}).values())
     bookings = list(cfg.get("bookings", {}).values())
@@ -1038,17 +1050,17 @@ async def flightdashboard(interaction: discord.Interaction):
 @bot.tree.command(name="flightbooking", description="Staff: open or close bookings for a flight")
 @app_commands.describe(flight_number="Flight number", bookings_open="True to open bookings, false to close")
 async def flightbooking(interaction: discord.Interaction, flight_number: str, bookings_open: bool):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured staff can manage flight bookings.", ephemeral=True)
     flight = get_flight(cfg, flight_number)
     if not flight:
         return await interaction.response.send_message("Flight not found.", ephemeral=True)
     flight["booking_open"] = bookings_open
     data = load_data()
-    data.setdefault(str(interaction.guild.id), {}).setdefault("flights", {})[flight["flight_number"]] = flight
+    data.setdefault(str(STAFF_GUILD_ID), {}).setdefault("flights", {})[flight["flight_number"]] = flight
     save_data(data)
     await audit_log(interaction.guild, interaction.user, "Booking availability changed", f"{flight['flight_number']} bookings {'opened' if bookings_open else 'closed'}")
     await interaction.response.send_message(f"Bookings for **{flight['flight_number']}** are now {'open' if bookings_open else 'closed'}.", ephemeral=True)
@@ -1057,16 +1069,16 @@ async def flightbooking(interaction: discord.Interaction, flight_number: str, bo
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(channel="Channel where staff activity logs should be posted")
 async def stafflogsetup(interaction: discord.Interaction, channel: discord.TextChannel):
-    save_guild_config(interaction.guild_id, "staff_log_channel_id", channel.id)
+    save_guild_config(STAFF_GUILD_ID, "staff_log_channel_id", channel.id)
     await interaction.response.send_message(f"Staff activity logs will be posted in {channel.mention}.", ephemeral=True)
 
 @bot.tree.command(name="staffrank", description="Staff: assign or update a virtual airline staff rank")
 @app_commands.describe(member="Staff member", rank="Rank title (e.g. Cabin Crew, First Officer, Captain, Operations Manager)")
 async def staffrank(interaction: discord.Interaction, member: discord.Member, rank: str):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured staff can manage staff ranks.", ephemeral=True)
     if not staff_member(member, cfg):
         return await interaction.response.send_message("That member does not have the configured staff role.", ephemeral=True)
@@ -1074,7 +1086,7 @@ async def staffrank(interaction: discord.Interaction, member: discord.Member, ra
     if not rank:
         return await interaction.response.send_message("Rank cannot be empty.", ephemeral=True)
     data = load_data()
-    guild_cfg = data.setdefault(str(interaction.guild.id), {})
+    guild_cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     ranks = guild_cfg.setdefault("staff_ranks", {})
     ranks[str(member.id)] = {"rank": rank, "assigned_by": interaction.user.id, "updated_at": discord.utils.utcnow().isoformat()}
     save_data(data)
@@ -1083,10 +1095,10 @@ async def staffrank(interaction: discord.Interaction, member: discord.Member, ra
 
 @bot.tree.command(name="staffpromotions", description="Staff: view the virtual airline staff rank list")
 async def staffpromotions(interaction: discord.Interaction):
-    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured staff can view this list.", ephemeral=True)
     ranks = cfg.get("staff_ranks", {})
     lines = [f"• <@{member_id}> — **{record.get('rank', 'Unassigned')}**" for member_id, record in ranks.items()]
@@ -1099,8 +1111,8 @@ async def staffpromotions(interaction: discord.Interaction):
 async def staffactivity(interaction: discord.Interaction, limit: app_commands.Range[int, 1, 15] = 10):
     if not interaction.guild or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
-    cfg = guild_data(interaction.guild.id)
-    if not staff_member(interaction.user, cfg):
+    cfg = operations_data()
+    if interaction.guild.id != STAFF_GUILD_ID or not staff_member(interaction.user, cfg):
         return await interaction.response.send_message("Only configured staff can view activity logs.", ephemeral=True)
     entries = audit_store(cfg)[-limit:][::-1]
     lines = [f"• <@{e['actor_id']}> — **{e['action']}**\n{e['details']}\n{e['timestamp']}" for e in entries]
@@ -1116,7 +1128,7 @@ async def setup_views():
     bot.add_view(TicketControls())
     bot.add_view(TicketStaffTools())
     # Register persistent booking buttons from saved flights before Discord connects.
-    cfg = load_data().get(str(GUILD_ID), {})
+    cfg = load_data().get(str(STAFF_GUILD_ID), {})
     for flight in cfg.get("flights", {}).values():
         bot.add_view(BookFlightView(flight["flight_number"]))
         bot.add_view(CheckInFlightView(flight["flight_number"]))
@@ -1124,10 +1136,11 @@ async def setup_views():
 # Ensure classes/commands are defined before the bot starts.
 _original_setup_hook = bot.setup_hook
 async def setup_hook_with_views():
-    guild = discord.Object(id=GUILD_ID)
-    bot.tree.copy_global_to(guild=guild)
-    synced = await bot.tree.sync(guild=guild)
-    log.info("Synced %d commands to guild %s", len(synced), GUILD_ID)
+    for guild_id in (STAFF_GUILD_ID, MAIN_GUILD_ID):
+        guild = discord.Object(id=guild_id)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        log.info("Synced %d commands to guild %s", len(synced), guild_id)
     await setup_views()
 bot.setup_hook = setup_hook_with_views
 
