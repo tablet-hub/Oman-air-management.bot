@@ -787,6 +787,11 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
                 balances[passenger_id] = int(balances.get(passenger_id, 0)) + 1000
                 booking["skymiles_awarded"] = 1000
                 booking["skymiles_awarded_at"] = discord.utils.utcnow().isoformat()
+                cfg.setdefault("miles_transactions", []).append({
+                    "member_id": int(passenger_id), "amount": 1000, "type": "Flight reward",
+                    "description": f"{key} arrived • booking {booking.get('reference', 'N/A')}",
+                    "timestamp": discord.utils.utcnow().isoformat()
+                })
                 miles_awarded_now += 1
     save_data(data)
     main_guild = bot.get_guild(MAIN_GUILD_ID)
@@ -1089,6 +1094,68 @@ async def mymiles(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+@bot.tree.command(name="mileshistory", description="Member: view your recent SkyMiles transactions privately")
+async def mileshistory(interaction: discord.Interaction):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    cfg = operations_data()
+    entries = [t for t in cfg.get("miles_transactions", []) if int(t.get("member_id", 0)) == interaction.user.id]
+    entries = entries[-10:][::-1]
+    lines = [f"**{int(t.get('amount', 0)):+,} miles** • {t.get('type', 'Transaction')}\n{t.get('description', '—')}\n<t:{int(discord.utils.parse_time(t.get('timestamp')).timestamp())}:R>" for t in entries if discord.utils.parse_time(t.get("timestamp"))]
+    embed = discord.Embed(title="🧾 Oman Air | SkyMiles History", description="\n\n".join(lines)[:4000] or "No transactions recorded yet.", color=discord.Color.from_rgb(0, 45, 90))
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="redeemmiles", description="Member: redeem SkyMiles for virtual rewards")
+@app_commands.describe(reward="Choose a reward to redeem")
+@app_commands.choices(reward=[
+    app_commands.Choice(name="5,000 miles — Lounge access", value="lounge"),
+    app_commands.Choice(name="10,000 miles — Upgrade voucher", value="upgrade"),
+    app_commands.Choice(name="25,000 miles — Award ticket voucher", value="ticket"),
+])
+async def redeemmiles(interaction: discord.Interaction, reward: app_commands.Choice[str]):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    rewards = {
+        "lounge": (5000, "Virtual lounge access voucher"),
+        "upgrade": (10000, "Virtual upgrade voucher"),
+        "ticket": (25000, "Virtual award ticket voucher"),
+    }
+    cost, title = rewards[reward.value]
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    balances = cfg.setdefault("skymiles", {})
+    member_key = str(interaction.user.id)
+    balance = int(balances.get(member_key, 0))
+    if balance < cost:
+        return await interaction.response.send_message(f"You need **{cost - balance:,} more SkyMiles** for {title}.", ephemeral=True)
+    balances[member_key] = balance - cost
+    cfg.setdefault("miles_transactions", []).append({
+        "member_id": interaction.user.id, "amount": -cost, "type": "Redemption",
+        "description": title, "timestamp": discord.utils.utcnow().isoformat()
+    })
+    cfg.setdefault("miles_redemptions", []).append({
+        "member_id": interaction.user.id, "reward": title, "cost": cost,
+        "status": "Pending staff fulfilment", "redeemed_at": discord.utils.utcnow().isoformat()
+    })
+    save_data(data)
+    embed = discord.Embed(title="🎁 SkyMiles Redemption Submitted", description=f"You redeemed **{cost:,} SkyMiles** for **{title}**.\n\nYour reward is **Pending staff fulfilment**. Contact Oman Air staff if needed.", color=discord.Color.from_rgb(0, 45, 90))
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="milesredemptions", description="Staff: view recent SkyMiles reward redemptions")
+async def milesredemptions(interaction: discord.Interaction):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in the staff server.", ephemeral=True)
+    cfg = operations_data()
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured staff can view redemptions.", ephemeral=True)
+    entries = cfg.get("miles_redemptions", [])[-15:][::-1]
+    lines = [f"<@{e.get('member_id')}> • **{e.get('reward')}** • {int(e.get('cost', 0)):,} miles • {e.get('status', 'Pending')}" for e in entries]
+    embed = discord.Embed(title="🎁 Oman Air | SkyMiles Redemptions", description="\n".join(lines)[:4000] or "No redemptions yet.", color=discord.Color.from_rgb(0, 45, 90))
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 @bot.tree.command(name="milesadjust", description="Staff: add or remove SkyMiles from a passenger account")
 @app_commands.describe(member="Passenger account", amount="Miles to add or remove (positive or negative)", reason="Reason for the adjustment")
 async def milesadjust(interaction: discord.Interaction, member: discord.Member, amount: app_commands.Range[int, -1000000, 1000000], reason: str):
@@ -1105,7 +1172,13 @@ async def milesadjust(interaction: discord.Interaction, member: discord.Member, 
         return await interaction.response.send_message("That adjustment would make the passenger's balance negative.", ephemeral=True)
     balances[key] = updated
     data = load_data()
-    data.setdefault(str(STAFF_GUILD_ID), {})["skymiles"] = balances
+    staff_cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    staff_cfg["skymiles"] = balances
+    staff_cfg.setdefault("miles_transactions", []).append({
+        "member_id": member.id, "amount": amount, "type": "Staff adjustment",
+        "description": reason.strip()[:300], "actor_id": interaction.user.id,
+        "timestamp": discord.utils.utcnow().isoformat()
+    })
     save_data(data)
     await audit_log(interaction.guild, interaction.user, "SkyMiles adjusted", f"{amount:+,} miles for {member} ({member.id}). Reason: {reason.strip()[:300]}")
     await interaction.response.send_message(f"Updated {member.mention}'s balance: **{updated:,} SkyMiles** ({amount:+,}).", ephemeral=True)
