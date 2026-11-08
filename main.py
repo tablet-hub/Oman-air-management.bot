@@ -665,6 +665,152 @@ async def ticketstats(interaction: discord.Interaction):
 
 flight_group = app_commands.Group(name="flight", description="Manage Oman Air flight announcements")
 
+aircraft_group = app_commands.Group(name="aircraft", description="Manage the Oman Air virtual aircraft fleet")
+
+def aircraft_store(cfg: dict) -> dict:
+    return cfg.setdefault("aircraft", {})
+
+async def require_flight_staff(interaction: discord.Interaction) -> bool:
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID:
+        await interaction.response.send_message("Use this command in the Oman Air staff server.", ephemeral=True)
+        return False
+    if not isinstance(interaction.user, discord.Member) or not (
+        interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
+    ):
+        await interaction.response.send_message("You need Administrator or Manage Server permission to manage the fleet.", ephemeral=True)
+        return False
+    return True
+
+@aircraft_group.command(name="add", description="Register an aircraft in the virtual fleet")
+@app_commands.describe(registration="Unique aircraft registration, e.g. A4O-BA", model="Aircraft model", capacity="Passenger seat capacity")
+async def aircraft_add(interaction: discord.Interaction, registration: str, model: str, capacity: app_commands.Range[int, 1, 1000]):
+    if not await require_flight_staff(interaction):
+        return
+    registration = registration.strip().upper()
+    model = model.strip()
+    if not registration or len(registration) > 16 or not model or len(model) > 100:
+        return await interaction.response.send_message("Enter a registration (1–16 characters) and model (1–100 characters).", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    fleet = aircraft_store(cfg)
+    if registration in fleet:
+        return await interaction.response.send_message(f"Aircraft **{registration}** is already registered.", ephemeral=True)
+    fleet[registration] = {
+        "registration": registration, "model": model, "capacity": capacity,
+        "status": "Available", "created_by": interaction.user.id,
+        "created_at": discord.utils.utcnow().isoformat()
+    }
+    save_data(data)
+    await interaction.response.send_message(f"Registered **{registration}** — **{model}**, capacity **{capacity}**. Status: **Available**.", ephemeral=True)
+
+@aircraft_group.command(name="list", description="View the registered virtual aircraft fleet")
+async def aircraft_list(interaction: discord.Interaction):
+    if not await require_flight_staff(interaction):
+        return
+    fleet = operations_data().get("aircraft", {})
+    if not fleet:
+        return await interaction.response.send_message("No aircraft are registered yet. Use /aircraft add to register one.", ephemeral=True)
+    embed = discord.Embed(title="✈️ Oman Air | Virtual Aircraft Fleet", color=discord.Color.from_rgb(0, 45, 90))
+    for aircraft in list(fleet.values())[:25]:
+        embed.add_field(
+            name=f"{aircraft.get('registration', 'Unknown')} • {aircraft.get('status', 'Unknown')}",
+            value=f"**Model:** {aircraft.get('model', 'Not set')}\n**Seat capacity:** {aircraft.get('capacity', 'Not set')}",
+            inline=False
+        )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@aircraft_group.command(name="update", description="Update an aircraft's operational status or seat capacity")
+@app_commands.describe(registration="Aircraft registration", status="New operational status", capacity="New seat capacity (optional)")
+async def aircraft_update(interaction: discord.Interaction, registration: str, status: str, capacity: app_commands.Range[int, 1, 1000] = None):
+    if not await require_flight_staff(interaction):
+        return
+    key = registration.strip().upper()
+    allowed = {"Available", "Maintenance", "Out of Service"}
+    normalized = status.strip().title()
+    if normalized not in allowed:
+        return await interaction.response.send_message("Status must be Available, Maintenance, or Out of Service.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    aircraft = aircraft_store(cfg).get(key)
+    if not aircraft:
+        return await interaction.response.send_message(f"Aircraft **{key}** was not found.", ephemeral=True)
+    if normalized != "Available":
+        assigned = [f.get("flight_number") for f in cfg.get("flights", {}).values()
+                    if f.get("aircraft", "").strip().upper() == key
+                    and f.get("status") not in ("Cancelled", "Arrived")]
+        if assigned:
+            return await interaction.response.send_message(
+                f"Cannot mark **{key}** unavailable while assigned to active flight(s): {', '.join(assigned[:10])}. Reassign those flights first.",
+                ephemeral=True
+            )
+    aircraft["status"] = normalized
+    if capacity is not None:
+        aircraft["capacity"] = capacity
+    aircraft["updated_at"] = discord.utils.utcnow().isoformat()
+    aircraft["updated_by"] = interaction.user.id
+    save_data(data)
+    await interaction.response.send_message(f"Updated **{key}**: status **{normalized}**, capacity **{aircraft.get('capacity')}**.", ephemeral=True)
+
+@aircraft_group.command(name="assign", description="Assign an available aircraft to an existing flight")
+@app_commands.describe(flight_number="Flight to assign", registration="Registered aircraft")
+async def aircraft_assign(interaction: discord.Interaction, flight_number: str, registration: str):
+    if not await require_flight_staff(interaction):
+        return
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    flight_key = flight_number.strip().upper()
+    registration_key = registration.strip().upper()
+    flight = cfg.setdefault("flights", {}).get(flight_key)
+    aircraft = aircraft_store(cfg).get(registration_key)
+    if not flight:
+        return await interaction.response.send_message(f"Flight **{flight_key}** was not found.", ephemeral=True)
+    if not aircraft:
+        return await interaction.response.send_message(f"Aircraft **{registration_key}** is not registered.", ephemeral=True)
+    if flight.get("status") in ("Cancelled", "Departed", "Arrived"):
+        return await interaction.response.send_message("Aircraft cannot be assigned to a cancelled or departed flight.", ephemeral=True)
+    if aircraft.get("status") != "Available":
+        return await interaction.response.send_message(f"Aircraft **{registration_key}** is currently **{aircraft.get('status')}**.", ephemeral=True)
+    conflict = next((f for f in cfg.get("flights", {}).values()
+                     if f.get("flight_number") != flight_key
+                     and f.get("aircraft", "").strip().upper() == registration_key
+                     and f.get("status") not in ("Cancelled", "Arrived")), None)
+    if conflict:
+        return await interaction.response.send_message(f"Aircraft **{registration_key}** is already assigned to **{conflict.get('flight_number')}**.", ephemeral=True)
+    flight["aircraft"] = registration_key
+    flight["capacity"] = int(aircraft.get("capacity", 180))
+    flight["aircraft_model"] = aircraft.get("model", "Unknown")
+    flight["updated_at"] = discord.utils.utcnow().isoformat()
+    flight["updated_by"] = interaction.user.id
+    save_data(data)
+    await interaction.response.send_message(
+        f"Assigned **{registration_key}** ({aircraft.get('model')}) to **{flight_key}**. Booking capacity set to **{flight['capacity']}**.",
+        ephemeral=True
+    )
+
+@aircraft_group.command(name="remove", description="Remove an aircraft from the virtual fleet")
+@app_commands.describe(registration="Aircraft registration to remove")
+async def aircraft_remove(interaction: discord.Interaction, registration: str):
+    if not await require_flight_staff(interaction):
+        return
+    key = registration.strip().upper()
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    fleet = aircraft_store(cfg)
+    if key not in fleet:
+        return await interaction.response.send_message(f"Aircraft **{key}** was not found.", ephemeral=True)
+    assigned = [f.get("flight_number") for f in cfg.get("flights", {}).values()
+                if f.get("aircraft", "").strip().upper() == key
+                and f.get("status") not in ("Cancelled", "Arrived")]
+    if assigned:
+        return await interaction.response.send_message(
+            f"Cannot remove **{key}** while assigned to active flight(s): {', '.join(assigned[:10])}. Reassign them first.",
+            ephemeral=True
+        )
+    del fleet[key]
+    save_data(data)
+    await interaction.response.send_message(f"Removed **{key}** from the virtual fleet.", ephemeral=True)
+
+
 def save_guild_config(guild_id: int, key: str, value):
     data = load_data()
     cfg = data.setdefault(str(guild_id), {})
@@ -1572,6 +1718,7 @@ async def robloxconfirm(interaction: discord.Interaction):
         await interaction.followup.send("Roblox's verification service couldn't be reached right now. Please try again later.", ephemeral=True)
 
 bot.tree.add_command(flight_group)
+bot.tree.add_command(aircraft_group)
 
 # ---------------- SkyMiles Shop Panel ----------------
 
