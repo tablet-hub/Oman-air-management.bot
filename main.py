@@ -588,13 +588,24 @@ def flight_embed(guild: discord.Guild, flight: dict, title: str = "✈️ OMAN A
     embed.timestamp = discord.utils.utcnow()
     return embed
 
+class BookFlightView(discord.ui.View):
+    def __init__(self, flight_number: str):
+        super().__init__(timeout=None)
+        self.flight_number = flight_number.upper()
+        self.book_button.custom_id = f"oman_book_flight:{self.flight_number}"
+
+    @discord.ui.button(label="Book Flight", emoji="🎟️", style=discord.ButtonStyle.success)
+    async def book_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_flight_booking(interaction, self.flight_number)
+
+
 async def post_flight_announcement(guild: discord.Guild, flight: dict):
     cfg = guild_data(guild.id)
     channel_id = cfg.get("flight_announcement_channel_id")
     channel = guild.get_channel(channel_id) if channel_id else None
     if not isinstance(channel, discord.TextChannel):
         return False
-    await channel.send(embed=flight_embed(guild, flight))
+    await channel.send(embed=flight_embed(guild, flight), view=BookFlightView(flight["flight_number"]))
     return True
 
 @bot.tree.command(name="flightsetup", description="Configure the flight announcement channel")
@@ -780,11 +791,9 @@ def get_flight(cfg: dict, flight_number: str):
 def get_booking(cfg: dict, reference: str):
     return cfg.get("bookings", {}).get(reference.strip().upper())
 
-@bot.tree.command(name="bookflight", description="Member: privately book a seat on an Oman Air flight")
-@app_commands.describe(flight_number="Flight number to book")
-async def bookflight(interaction: discord.Interaction, flight_number: str):
+async def process_flight_booking(interaction: discord.Interaction, flight_number: str):
     if not interaction.guild:
-        return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
+        return await interaction.response.send_message("Use this button or command in the server.", ephemeral=True)
     data = load_data()
     cfg = data.setdefault(str(interaction.guild.id), {})
     flight = get_flight(cfg, flight_number)
@@ -795,7 +804,7 @@ async def bookflight(interaction: discord.Interaction, flight_number: str):
     bookings = booking_store(cfg)
     if flight.get("booking_open", True) is False:
         return await interaction.response.send_message("Bookings for this flight are currently closed.", ephemeral=True)
-    existing = next((b for b in bookings.values() if b.get("flight_number") == flight["flight_number"] and b.get("passenger_id") == interaction.user.id), None)
+    existing = next((b for b in bookings.values() if b.get("flight_number") == flight["flight_number"] and b.get("passenger_id") == interaction.user.id and b.get("status") != "Cancelled"), None)
     if existing:
         return await interaction.response.send_message(f"You already booked this flight. Your reference is **{existing['reference']}**.", ephemeral=True)
     capacity = int(flight.get("capacity", 180))
@@ -813,7 +822,17 @@ async def bookflight(interaction: discord.Interaction, flight_number: str):
     embed.add_field(name="🚪 Gate", value=flight.get("gate", "TBA"), inline=True)
     embed.add_field(name="Status", value="Booked • Not checked in", inline=False)
     embed.set_footer(text="Keep your booking reference for check-in and boarding.")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    try:
+        await interaction.user.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        return await interaction.response.send_message("Your seat is booked, but I couldn't DM you. Please enable DMs from this server. Here is your confirmation:", embed=embed, ephemeral=True)
+    await interaction.response.send_message(f"✅ Booked **{flight['flight_number']}**! I've sent your confirmation and reference **{reference}** in a DM.", ephemeral=True)
+
+
+@bot.tree.command(name="bookflight", description="Member: privately book a seat on an Oman Air flight")
+@app_commands.describe(flight_number="Flight number to book")
+async def bookflight(interaction: discord.Interaction, flight_number: str):
+    await process_flight_booking(interaction, flight_number)
 
 @bot.tree.command(name="checkin", description="Member: check in using your booking reference")
 @app_commands.describe(booking_reference="Your booking reference")
@@ -986,6 +1005,10 @@ async def setup_views():
     bot.add_view(TicketPanel())
     bot.add_view(TicketControls())
     bot.add_view(TicketStaffTools())
+    # Register each flight's persistent Book Flight button after bot restarts.
+    for guild in bot.guilds:
+        for flight in guild_data(guild.id).get("flights", {}).values():
+            bot.add_view(BookFlightView(flight["flight_number"]))
 
 # Ensure classes/commands are defined before the bot starts.
 _original_setup_hook = bot.setup_hook
