@@ -1541,7 +1541,6 @@ async def on_ready():
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Oman Air Support ✈️"))
 
 # Main-server app commands are limited to verification until a member has VERIFIED.
-@bot.tree.interaction_check
 async def require_roblox_verification(interaction: discord.Interaction) -> bool:
     if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
         return True
@@ -1554,5 +1553,7 @@ async def require_roblox_verification(interaction: discord.Interaction) -> bool:
     else:
         await interaction.response.send_message("You must complete Roblox verification first with `/robloxverify` and `/robloxconfirm`.", ephemeral=True)
     return False
+
+bot.tree.interaction_check = require_roblox_verification
 
 bot.run(TOKEN)
