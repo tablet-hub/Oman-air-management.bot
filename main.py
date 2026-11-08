@@ -1299,9 +1299,88 @@ async def staffactivity(interaction: discord.Interaction, limit: app_commands.Ra
 
 bot.tree.add_command(flight_group)
 
+# ---------------- SkyMiles Shop Panel ----------------
+
+MILES_SHOP_ITEMS = {
+    "blue": {"name": "Sindbad Blue Class", "cost": 2500, "description": "Virtual Blue tier • member welcome perks"},
+    "silver": {"name": "Sindbad Silver Class", "cost": 6000, "description": "Virtual Silver tier • priority support and bonus perks"},
+    "gold": {"name": "Sindbad Gold Class", "cost": 10000, "description": "Virtual Gold tier • premium member perks"},
+    "lounge": {"name": "Oman Air Lounge Pass", "cost": 4000, "description": "Virtual lounge access voucher"},
+    "priority": {"name": "Priority Service Pass", "cost": 7500, "description": "Virtual priority check-in and support pass"},
+    "business": {"name": "OneFlight Business Forever", "cost": 50000, "description": "Virtual lifetime business-class status in this community"},
+    "extra_bag": {"name": "Extra Baggage Voucher", "cost": 3000, "description": "Virtual extra-baggage reward voucher"},
+}
+
+class MilesShopSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=item["name"], description=f"{item['cost']:,} SkyMiles • {item['description']}"[:100], value=key)
+            for key, item in MILES_SHOP_ITEMS.items()
+        ]
+        super().__init__(placeholder="Choose a reward to redeem…", min_values=1, max_values=1, options=options, custom_id="oman_miles_shop:select")
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+            return await interaction.response.send_message("Use the SkyMiles Shop in the main server.", ephemeral=True)
+        key = self.values[0]
+        item = MILES_SHOP_ITEMS[key]
+        data = load_data()
+        cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+        balances = cfg.setdefault("skymiles", {})
+        member_key = str(interaction.user.id)
+        balance = int(balances.get(member_key, 0))
+        if balance < item["cost"]:
+            return await interaction.response.send_message(f"You have **{balance:,} SkyMiles**. You need **{item['cost'] - balance:,} more** to redeem **{item['name']}**.", ephemeral=True)
+        balances[member_key] = balance - item["cost"]
+        cfg.setdefault("miles_transactions", []).append({
+            "member_id": interaction.user.id, "amount": -item["cost"], "type": "Shop redemption",
+            "description": item["name"], "timestamp": discord.utils.utcnow().isoformat()
+        })
+        cfg.setdefault("miles_redemptions", []).append({
+            "member_id": interaction.user.id, "reward": item["name"], "cost": item["cost"],
+            "status": "Pending staff fulfilment", "redeemed_at": discord.utils.utcnow().isoformat()
+        })
+        save_data(data)
+        embed = discord.Embed(title="🛍️ SkyMiles Shop | Redemption Submitted", description=f"You redeemed **{item['name']}** for **{item['cost']:,} SkyMiles**.\n\nRemaining balance: **{balances[member_key]:,} SkyMiles**\nStatus: **Pending staff fulfilment**\n\nThese are virtual community rewards, not real airline benefits.", color=discord.Color.from_rgb(0, 45, 90))
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class MilesShopView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(MilesShopSelect())
+
+class MilesShopPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Open SkyMiles Shop", emoji="🛍️", style=discord.ButtonStyle.success, custom_id="oman_miles_shop:open")
+    async def open_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+            return await interaction.response.send_message("Use the shop panel in the main server.", ephemeral=True)
+        cfg = operations_data()
+        balance = int(cfg.get("skymiles", {}).get(str(interaction.user.id), 0))
+        embed = discord.Embed(title="🛍️ Oman Air | SkyMiles Shop", description=f"Your balance: **{balance:,} SkyMiles**\nChoose a reward from the menu below. Redeemptions are virtual community perks and are fulfilled by staff.", color=discord.Color.from_rgb(0, 45, 90))
+        for item in MILES_SHOP_ITEMS.values():
+            embed.add_field(name=f"{item['name']} • {item['cost']:,} miles", value=item["description"], inline=False)
+        await interaction.response.send_message(embed=embed, view=MilesShopView(), ephemeral=True)
+
+@bot.tree.command(name="mileshopanel", description="Staff: publish the persistent SkyMiles Shop panel")
+@app_commands.default_permissions(manage_guild=True)
+async def mileshopanel(interaction: discord.Interaction):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Run this command in the main server.", ephemeral=True)
+    if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_guild:
+        return await interaction.response.send_message("You need Manage Server permission to publish the shop panel.", ephemeral=True)
+    embed = discord.Embed(title="🛍️ Oman Air | SkyMiles Shop", description="Exchange your SkyMiles for Sindbad-inspired membership tiers and virtual community rewards.\n\nPress **Open SkyMiles Shop** to view the catalogue and redeem privately. Staff fulfilment may be required. These are community roleplay rewards, not actual airline benefits.", color=discord.Color.from_rgb(0, 45, 90))
+    embed.add_field(name="Sindbad-inspired tiers", value="🔵 Blue Class — 2,500 points\n⚪ Silver Class — 6,000 points\n🟡 Gold Class — 10,000 points", inline=False)
+    embed.add_field(name="Featured reward", value="💼 OneFlight Business Forever — 50,000 points", inline=False)
+    await interaction.channel.send(embed=embed, view=MilesShopPanelView())
+    await interaction.response.send_message("SkyMiles Shop panel published.", ephemeral=True)
+
+
 # Persistent component views are registered at startup.
 async def setup_views():
-    bot.add_view(TicketPanel())
+    bot.add_view(MilesShopPanelView())\n    bot.add_view(MilesShopView())\n    bot.add_view(TicketPanel())
     bot.add_view(TicketControls())
     bot.add_view(TicketStaffTools())
     # Register persistent booking buttons from saved flights before Discord connects.
