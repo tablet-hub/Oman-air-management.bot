@@ -705,19 +705,24 @@ async def aircraft_add(interaction: discord.Interaction, registration: str, mode
     await interaction.response.send_message(f"Registered **{registration}** — **{model}**, capacity **{capacity}**. Status: **Available**.", ephemeral=True)
 
 @aircraft_group.command(name="list", description="Publish the aircraft fleet in a channel for everyone to view")
-@app_commands.describe(channel="Channel where the public fleet list will be posted")
+@app_commands.describe(channel="Channel in the main server where the fleet list will be posted")
 async def aircraft_list(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not await require_flight_staff(interaction):
-        return
-    if channel.guild.id != interaction.guild.id:
-        return await interaction.response.send_message("Choose a text channel in this staff server.", ephemeral=True)
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Use this command in the Oman Air main server.", ephemeral=True)
+    if not isinstance(interaction.user, discord.Member) or not (
+        interaction.user.guild_permissions.administrator or interaction.user.guild_permissions.manage_guild
+    ):
+        return await interaction.response.send_message("You need Administrator or Manage Server permission in the main server to publish the fleet.", ephemeral=True)
+    if channel.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Choose a text channel in the Oman Air main server.", ephemeral=True)
     permissions = channel.permissions_for(interaction.guild.me)
     if not permissions.send_messages or not permissions.embed_links:
         return await interaction.response.send_message("I need Send Messages and Embed Links permissions in that channel.", ephemeral=True)
 
-    fleet = operations_data().get("aircraft", {})
+    data = load_data()
+    fleet = data.setdefault(str(STAFF_GUILD_ID), {}).get("aircraft", {})
     if not fleet:
-        return await interaction.response.send_message("No aircraft are registered yet. Use /aircraft add to register one.", ephemeral=True)
+        return await interaction.response.send_message("No aircraft are registered yet. Fleet staff must use /aircraft add in the staff server.", ephemeral=True)
 
     aircraft_items = list(fleet.values())
     model_counts = {}
@@ -750,7 +755,7 @@ async def aircraft_list(interaction: discord.Interaction, channel: discord.TextC
     except discord.HTTPException:
         log.exception("Could not publish aircraft fleet in channel %s", channel.id)
         return await interaction.response.send_message("Discord could not publish the fleet list. Please try again.", ephemeral=True)
-    await interaction.response.send_message(f"Published the public aircraft fleet in {channel.mention}. Everyone who can view that channel can see it.", ephemeral=True)
+    await interaction.response.send_message(f"Published the public aircraft fleet in {channel.mention}.", ephemeral=True)
 
 @aircraft_group.command(name="update", description="Update an aircraft's operational status or seat capacity")
 @app_commands.describe(registration="Aircraft registration", status="New operational status", capacity="New seat capacity (optional)")
