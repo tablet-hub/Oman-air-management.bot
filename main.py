@@ -605,8 +605,28 @@ async def post_flight_announcement(guild: discord.Guild, flight: dict):
     channel = guild.get_channel(channel_id) if channel_id else None
     if not isinstance(channel, discord.TextChannel):
         return False
-    await channel.send(embed=flight_embed(guild, flight), view=BookFlightView(flight["flight_number"]))
+    await channel.send(content="@everyone", embed=flight_embed(guild, flight), view=BookFlightView(flight["flight_number"]), allowed_mentions=discord.AllowedMentions(everyone=True))
     return True
+
+@bot.tree.command(name="clear", description="Staff: clear recent messages from this channel")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(amount="Number of recent messages to delete (1–100)")
+async def clear(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100]):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in a server channel.", ephemeral=True)
+    if not interaction.user.guild_permissions.manage_messages:
+        return await interaction.response.send_message("You need the Manage Messages permission to use this command.", ephemeral=True)
+    if not isinstance(interaction.channel, discord.TextChannel):
+        return await interaction.response.send_message("This command only works in text channels.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        deleted = await interaction.channel.purge(limit=amount)
+    except discord.Forbidden:
+        return await interaction.followup.send("I need the Manage Messages permission to delete messages.", ephemeral=True)
+    except discord.HTTPException:
+        return await interaction.followup.send("Discord could not delete the messages. Please try again.", ephemeral=True)
+    await interaction.followup.send(f"🧹 Cleared **{len(deleted)}** messages.", ephemeral=True)
+
 
 @bot.tree.command(name="flightsetup", description="Configure the flight announcement channel")
 @app_commands.default_permissions(administrator=True)
