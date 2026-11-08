@@ -924,7 +924,7 @@ async def checkinstart(interaction: discord.Interaction, flight_number: str, cha
     save_data(data)
     embed = discord.Embed(title="🛂 OMAN AIR | CHECK-IN NOW OPEN", description=f"Check-in has started for **{flight['flight_number']}**\n**Route:** {flight['origin']} ➜ {flight['destination']}\n**Check-in:** {flight.get('check_in', 'TBA')}\n**Departure:** {flight.get('departure', 'TBA')}\n\nPassengers who booked this flight, press **Check In** below. The bot will verify your booking automatically and privately issue your boarding pass.", color=discord.Color.from_rgb(0, 45, 90), timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"{interaction.guild.name} • Oman Air Virtual Operations")
-    await target.send(embed=embed, view=CheckInFlightView(flight["flight_number"]))
+    await target.send(content="@everyone", embed=embed, view=CheckInFlightView(flight["flight_number"]), allowed_mentions=discord.AllowedMentions(everyone=True))
     await interaction.response.send_message(f"Check-in announcement posted in {target.mention} for **{flight['flight_number']}**.", ephemeral=True)
 
 
