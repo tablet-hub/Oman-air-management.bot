@@ -375,6 +375,18 @@ async def welcomesetup(interaction: discord.Interaction, channel: discord.TextCh
 @bot.event
 async def on_member_join(member: discord.Member):
     try:
+        # Automatically assign the ECO passenger role to new members in the main server.
+        if member.guild.id == MAIN_GUILD_ID:
+            eco_role = discord.utils.get(member.guild.roles, name="ECO")
+            if eco_role is None:
+                log.error("ECO role was not found in main guild %s", member.guild.id)
+            elif eco_role not in member.roles:
+                try:
+                    await member.add_roles(eco_role, reason="Automatic new-member passenger role")
+                    log.info("Assigned ECO role to new member %s (%s)", member, member.id)
+                except (discord.Forbidden, discord.HTTPException):
+                    log.exception("Could not assign ECO role to new member %s (%s)", member, member.id)
+
         cfg = load_data().get(str(member.guild.id), {})
         channel_id = cfg.get("welcome_channel_id")
         if not channel_id:
