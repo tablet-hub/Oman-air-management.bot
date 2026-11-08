@@ -576,6 +576,7 @@ def flight_embed(guild: discord.Guild, flight: dict, title: str = "✈️ OMAN A
         description=f"**{flight['flight_number']}**\n{flight['origin']}  ➜  {flight['destination']}",
         color=discord.Color.from_rgb(0, 45, 90)
     )
+    embed.add_field(name="🧳 Check-in", value=flight.get("check_in") or "To be announced", inline=True)
     embed.add_field(name="🛫 Departure", value=flight["departure"], inline=True)
     embed.add_field(name="🛬 Arrival", value=flight["arrival"], inline=True)
     embed.add_field(name="🛩️ Aircraft", value=flight["aircraft"], inline=True)
@@ -611,9 +612,10 @@ async def flightsetup(interaction: discord.Interaction, channel: discord.TextCha
     departure="Departure date and time, include timezone (e.g. 12 Nov 2026, 14:30 UTC)",
     arrival="Arrival date and time, include timezone",
     aircraft="Aircraft type",
+    check_in="Check-in opening/closing date and time, include timezone (e.g. 12 Nov 2026, 12:30–13:30 UTC)",
     gate="Departure gate or TBA"
 )
-async def flight_create(interaction: discord.Interaction, flight_number: str, origin: str, destination: str, departure: str, arrival: str, aircraft: str, gate: str = "TBA"):
+async def flight_create(interaction: discord.Interaction, flight_number: str, origin: str, destination: str, departure: str, arrival: str, aircraft: str, check_in: str = "TBA", gate: str = "TBA"):
     if not interaction.guild:
         return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
     data = load_data()
@@ -628,6 +630,7 @@ async def flight_create(interaction: discord.Interaction, flight_number: str, or
         "destination": destination.strip()[:100],
         "departure": departure.strip()[:100],
         "arrival": arrival.strip()[:100],
+        "check_in": check_in.strip()[:100],
         "aircraft": aircraft.strip()[:100],
         "gate": gate.strip()[:50],
         "status": "Scheduled",
@@ -682,7 +685,7 @@ async def flight_list(interaction: discord.Interaction):
         return await interaction.response.send_message("There are no active flights recorded.", ephemeral=True)
     embed = discord.Embed(title="🗂️ Oman Air | Active Flight Schedule", color=discord.Color.from_rgb(0, 45, 90))
     for f in active[:25]:
-        embed.add_field(name=f"{f['flight_number']} • {f['status']}", value=f"{f['origin']} ➜ {f['destination']}\nDeparture: {f['departure']}\nGate: {f.get('gate', 'TBA')}", inline=False)
+        embed.add_field(name=f"{f['flight_number']} • {f['status']}", value=f"{f['origin']} ➜ {f['destination']}\nCheck-in: {f.get('check_in', 'TBA')}\nDeparture: {f['departure']}\nArrival: {f['arrival']}\nGate: {f.get('gate', 'TBA')}", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @flight_group.command(name="cancel", description="Cancel a flight and publish a cancellation notice")
