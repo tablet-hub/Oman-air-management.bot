@@ -834,26 +834,26 @@ async def process_flight_booking(interaction: discord.Interaction, flight_number
 async def bookflight(interaction: discord.Interaction, flight_number: str):
     await process_flight_booking(interaction, flight_number)
 
-@bot.tree.command(name="checkin", description="Member: check in using your booking reference")
-@app_commands.describe(booking_reference="Your booking reference")
-async def checkin(interaction: discord.Interaction, booking_reference: str):
+async def process_flight_checkin(interaction: discord.Interaction, flight_number: str):
     if not interaction.guild:
-        return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
+        return await interaction.response.send_message("Use this button in the server.", ephemeral=True)
     data = load_data()
     cfg = data.setdefault(str(interaction.guild.id), {})
-    booking = get_booking(cfg, booking_reference)
-    if not booking or booking.get("passenger_id") != interaction.user.id:
-        return await interaction.response.send_message("Booking not found for your account. Check the reference.", ephemeral=True)
-    flight = get_flight(cfg, booking["flight_number"])
-    if not flight or flight.get("status") in ("Cancelled", "Departed", "Arrived"):
-        return await interaction.response.send_message("Check-in is unavailable for this flight.", ephemeral=True)
+    flight = get_flight(cfg, flight_number)
+    if not flight or not flight.get("checkin_open"):
+        return await interaction.response.send_message("Check-in is not currently open for this flight.", ephemeral=True)
+    booking = next((b for b in cfg.get("bookings", {}).values() if b.get("flight_number") == flight["flight_number"] and b.get("passenger_id") == interaction.user.id and b.get("status") != "Cancelled"), None)
+    if not booking:
+        return await interaction.response.send_message("I couldn't find a booking for you on this flight. You must book a seat first.", ephemeral=True)
     if booking.get("checked_in"):
-        return await interaction.response.send_message("You are already checked in for this flight.", ephemeral=True)
+        return await interaction.response.send_message(f"You are already checked in. Your reference is **{booking['reference']}**.", ephemeral=True)
+    if flight.get("status") in ("Cancelled", "Departed", "Arrived"):
+        return await interaction.response.send_message("Check-in is unavailable for this flight.", ephemeral=True)
     booking["checked_in"] = True
     booking["checked_in_at"] = discord.utils.utcnow().isoformat()
     booking["status"] = "Checked in"
     save_data(data)
-    embed = discord.Embed(title="🛂 Oman Air | Boarding Pass", description=f"**Passenger:** {interaction.user.mention}\n**Reference:** {booking['reference']}\n**Flight:** {flight['flight_number']}\n**Route:** {flight['origin']} ➜ {flight['destination']}", color=discord.Color.from_rgb(0, 45, 90))
+    embed = discord.Embed(title="🛂 Oman Air | Digital Boarding Pass", description=f"**Passenger:** {interaction.user.mention}\n**Reference:** {booking['reference']}\n**Flight:** {flight['flight_number']}\n**Route:** {flight['origin']} ➜ {flight['destination']}", color=discord.Color.from_rgb(0, 45, 90))
     embed.add_field(name="🧳 Check-in", value=flight.get("check_in", "TBA"), inline=False)
     embed.add_field(name="🛫 Departure", value=flight.get("departure", "TBA"), inline=True)
     embed.add_field(name="🛬 Arrival", value=flight.get("arrival", "TBA"), inline=True)
@@ -861,6 +861,52 @@ async def checkin(interaction: discord.Interaction, booking_reference: str):
     embed.add_field(name="Boarding status", value="CHECKED IN • Awaiting boarding", inline=False)
     embed.set_footer(text="Present this digital boarding pass to virtual airline staff.")
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    try:
+        await interaction.user.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        log.info("Could not DM boarding pass to user %s", interaction.user.id)
+
+
+class CheckInFlightView(discord.ui.View):
+    def __init__(self, flight_number: str):
+        super().__init__(timeout=None)
+        self.flight_number = flight_number.upper()
+        self.check_in_button.custom_id = f"oman_checkin_flight:{self.flight_number}"
+
+    @discord.ui.button(label="Check In", emoji="🛂", style=discord.ButtonStyle.primary)
+    async def check_in_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await process_flight_checkin(interaction, self.flight_number)
+
+
+@bot.tree.command(name="checkinstart", description="Staff: announce check-in opening for a flight with a Check In button")
+@app_commands.describe(flight_number="Flight number", channel="Channel for the check-in announcement (optional)")
+async def checkinstart(interaction: discord.Interaction, flight_number: str, channel: discord.TextChannel = None):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in the server.", ephemeral=True)
+    cfg = guild_data(interaction.guild.id)
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured Oman Air staff can open check-in.", ephemeral=True)
+    flight = get_flight(cfg, flight_number)
+    if not flight:
+        return await interaction.response.send_message("Flight not found. Check the flight number.", ephemeral=True)
+    if flight.get("status") in ("Cancelled", "Departed", "Arrived"):
+        return await interaction.response.send_message("Check-in cannot be opened for this flight status.", ephemeral=True)
+    target = channel
+    if target is None:
+        channel_id = cfg.get("flight_announcement_channel_id")
+        target = interaction.guild.get_channel(channel_id) if channel_id else None
+    if not isinstance(target, discord.TextChannel):
+        return await interaction.response.send_message("Choose a channel or configure /flightsetup first.", ephemeral=True)
+    flight["checkin_open"] = True
+    flight["checkin_opened_at"] = discord.utils.utcnow().isoformat()
+    data = load_data()
+    data.setdefault(str(interaction.guild.id), {}).setdefault("flights", {})[flight["flight_number"]] = flight
+    save_data(data)
+    embed = discord.Embed(title="🛂 OMAN AIR | CHECK-IN NOW OPEN", description=f"Check-in has started for **{flight['flight_number']}**\n**Route:** {flight['origin']} ➜ {flight['destination']}\n**Check-in:** {flight.get('check_in', 'TBA')}\n**Departure:** {flight.get('departure', 'TBA')}\n\nPassengers who booked this flight, press **Check In** below. The bot will verify your booking automatically and privately issue your boarding pass.", color=discord.Color.from_rgb(0, 45, 90), timestamp=discord.utils.utcnow())
+    embed.set_footer(text=f"{interaction.guild.name} • Oman Air Virtual Operations")
+    await target.send(embed=embed, view=CheckInFlightView(flight["flight_number"]))
+    await interaction.response.send_message(f"Check-in announcement posted in {target.mention} for **{flight['flight_number']}**.", ephemeral=True)
+
 
 @bot.tree.command(name="manifest", description="Staff: view the passenger manifest for a flight")
 @app_commands.describe(flight_number="Flight number")
@@ -1009,6 +1055,7 @@ async def setup_views():
     cfg = load_data().get(str(GUILD_ID), {})
     for flight in cfg.get("flights", {}).values():
         bot.add_view(BookFlightView(flight["flight_number"]))
+        bot.add_view(CheckInFlightView(flight["flight_number"]))
 
 # Ensure classes/commands are defined before the bot starts.
 _original_setup_hook = bot.setup_hook
