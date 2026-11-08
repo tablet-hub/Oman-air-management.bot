@@ -703,21 +703,53 @@ async def aircraft_add(interaction: discord.Interaction, registration: str, mode
     save_data(data)
     await interaction.response.send_message(f"Registered **{registration}** — **{model}**, capacity **{capacity}**. Status: **Available**.", ephemeral=True)
 
-@aircraft_group.command(name="list", description="View the registered virtual aircraft fleet")
-async def aircraft_list(interaction: discord.Interaction):
+@aircraft_group.command(name="list", description="Publish the aircraft fleet in a channel for everyone to view")
+@app_commands.describe(channel="Channel where the public fleet list will be posted")
+async def aircraft_list(interaction: discord.Interaction, channel: discord.TextChannel):
     if not await require_flight_staff(interaction):
         return
+    if channel.guild.id != interaction.guild.id:
+        return await interaction.response.send_message("Choose a text channel in this staff server.", ephemeral=True)
+    permissions = channel.permissions_for(interaction.guild.me)
+    if not permissions.send_messages or not permissions.embed_links:
+        return await interaction.response.send_message("I need Send Messages and Embed Links permissions in that channel.", ephemeral=True)
+
     fleet = operations_data().get("aircraft", {})
     if not fleet:
         return await interaction.response.send_message("No aircraft are registered yet. Use /aircraft add to register one.", ephemeral=True)
-    embed = discord.Embed(title="✈️ Oman Air | Virtual Aircraft Fleet", color=discord.Color.from_rgb(0, 45, 90))
-    for aircraft in list(fleet.values())[:25]:
+
+    aircraft_items = list(fleet.values())
+    model_counts = {}
+    for aircraft in aircraft_items:
+        model = aircraft.get("model", "Unspecified model")
+        model_counts[model] = model_counts.get(model, 0) + 1
+    model_summary = "\n".join(
+        f"• **{model}** — {count} aircraft" for model, count in sorted(model_counts.items())
+    )
+    embed = discord.Embed(
+        title="✈️ Oman Air | Official Virtual Aircraft Fleet",
+        description=f"**Total aircraft:** {len(aircraft_items)}\n**Aircraft by model:**\n{model_summary}",
+        color=discord.Color.from_rgb(0, 45, 90),
+        timestamp=discord.utils.utcnow()
+    )
+    for aircraft in aircraft_items[:24]:
         embed.add_field(
             name=f"{aircraft.get('registration', 'Unknown')} • {aircraft.get('status', 'Unknown')}",
             value=f"**Model:** {aircraft.get('model', 'Not set')}\n**Seat capacity:** {aircraft.get('capacity', 'Not set')}",
             inline=False
         )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    if len(aircraft_items) > 24:
+        embed.set_footer(text=f"Showing 24 of {len(aircraft_items)} aircraft. Contact fleet staff for the complete register.")
+    else:
+        embed.set_footer(text="Oman Air • Virtual Fleet Register")
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        return await interaction.response.send_message("I cannot post in that channel. Check my channel permissions.", ephemeral=True)
+    except discord.HTTPException:
+        log.exception("Could not publish aircraft fleet in channel %s", channel.id)
+        return await interaction.response.send_message("Discord could not publish the fleet list. Please try again.", ephemeral=True)
+    await interaction.response.send_message(f"Published the public aircraft fleet in {channel.mention}. Everyone who can view that channel can see it.", ephemeral=True)
 
 @aircraft_group.command(name="update", description="Update an aircraft's operational status or seat capacity")
 @app_commands.describe(registration="Aircraft registration", status="New operational status", capacity="New seat capacity (optional)")
