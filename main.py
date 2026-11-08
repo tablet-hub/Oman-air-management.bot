@@ -2,6 +2,7 @@ import os
 import logging
 import json
 from pathlib import Path
+from datetime import timedelta
 
 import discord
 from discord import app_commands
@@ -342,6 +343,173 @@ async def on_member_join(member: discord.Member):
         await channel.send(embed=embed)
     except discord.Forbidden:
         log.error("Missing permission to send welcome message in channel %s", channel.id)
+
+# ---------------- Moderation system ----------------
+
+def is_moderator(member: discord.Member) -> bool:
+    perms = member.guild_permissions
+    return perms.administrator or perms.manage_messages or perms.moderate_members or perms.kick_members or perms.ban_members
+
+async def require_moderator(interaction: discord.Interaction) -> bool:
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        await interaction.response.send_message("Use this command inside the server.", ephemeral=True)
+        return False
+    if not is_moderator(interaction.user):
+        await interaction.response.send_message("You need a moderation permission to use this command.", ephemeral=True)
+        return False
+    return True
+
+def get_warnings(guild_id: int, user_id: int):
+    data = load_data()
+    return data.get(str(guild_id), {}).get("warnings", {}).get(str(user_id), [])
+
+def save_warning(guild_id: int, user_id: int, entry: dict):
+    data = load_data()
+    guild_cfg = data.setdefault(str(guild_id), {})
+    warnings = guild_cfg.setdefault("warnings", {}).setdefault(str(user_id), [])
+    warnings.append(entry)
+    save_data(data)
+    return len(warnings)
+
+async def send_modlog(guild: discord.Guild, title: str, description: str, moderator: discord.Member):
+    cfg = guild_data(guild.id)
+    channel_id = cfg.get("modlog_channel_id")
+    channel = guild.get_channel(channel_id) if channel_id else None
+    if not isinstance(channel, discord.TextChannel):
+        return
+    embed = discord.Embed(title=f"🛡️ {title}", description=description, color=discord.Color.from_rgb(0, 45, 90))
+    embed.add_field(name="Moderator", value=moderator.mention, inline=True)
+    embed.timestamp = discord.utils.utcnow()
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        log.warning("Cannot send moderation log in channel %s", channel.id)
+
+@bot.tree.command(name="modlogsetup", description="Set the channel for moderation logs")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Channel for moderation action logs")
+async def modlogsetup(interaction: discord.Interaction, channel: discord.TextChannel):
+    data = load_data()
+    cfg = data.setdefault(str(interaction.guild_id), {})
+    cfg["modlog_channel_id"] = channel.id
+    save_data(data)
+    await interaction.response.send_message(f"Moderation logs will be posted in {channel.mention}.", ephemeral=True)
+
+@bot.tree.command(name="warn", description="Issue a warning to a member")
+@app_commands.default_permissions(moderate_members=True)
+@app_commands.describe(member="Member to warn", reason="Reason for the warning")
+async def warn(interaction: discord.Interaction, member: discord.Member, reason: str):
+    if not await require_moderator(interaction): return
+    if member.id == interaction.user.id:
+        return await interaction.response.send_message("You cannot warn yourself.", ephemeral=True)
+    count = save_warning(interaction.guild.id, member.id, {
+        "reason": reason[:500], "moderator_id": interaction.user.id,
+        "timestamp": discord.utils.utcnow().isoformat()
+    })
+    embed = discord.Embed(title="⚠️ Member Warning", description=f"{member.mention} has been warned.", color=discord.Color.orange())
+    embed.add_field(name="Reason", value=reason[:1024], inline=False)
+    embed.add_field(name="Total warnings", value=str(count), inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await send_modlog(interaction.guild, "Member Warned", f"Member: {member.mention}\nReason: {reason}\nWarnings: {count}", interaction.user)
+    try:
+        await member.send(f"You received a warning in **{interaction.guild.name}**.\nReason: {reason}")
+    except discord.Forbidden:
+        pass
+
+@bot.tree.command(name="warnings", description="View a member's warnings")
+@app_commands.default_permissions(moderate_members=True)
+async def warnings(interaction: discord.Interaction, member: discord.Member):
+    if not await require_moderator(interaction): return
+    entries = get_warnings(interaction.guild.id, member.id)
+    if not entries:
+        return await interaction.response.send_message(f"{member.mention} has no warnings.", ephemeral=True)
+    lines = [f"**{i}.** {entry.get('reason', 'No reason')} — <@{entry.get('moderator_id', 0)}> — {entry.get('timestamp', '')[:10]}" for i, entry in enumerate(entries, 1)]
+    embed = discord.Embed(title=f"Warnings for {member}", description="\n".join(lines)[:4000], color=discord.Color.orange())
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="clearwarnings", description="Clear all warnings for a member")
+@app_commands.default_permissions(moderate_members=True)
+async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
+    if not await require_moderator(interaction): return
+    data = load_data()
+    guild_cfg = data.setdefault(str(interaction.guild.id), {})
+    user_warnings = guild_cfg.setdefault("warnings", {})
+    count = len(user_warnings.get(str(member.id), []))
+    user_warnings.pop(str(member.id), None)
+    save_data(data)
+    await interaction.response.send_message(f"Cleared {count} warning(s) for {member.mention}.", ephemeral=True)
+    await send_modlog(interaction.guild, "Warnings Cleared", f"Member: {member.mention}\nCount cleared: {count}", interaction.user)
+
+@bot.tree.command(name="timeout", description="Timeout a member for a number of minutes")
+@app_commands.default_permissions(moderate_members=True)
+@app_commands.describe(member="Member to timeout", minutes="Duration in minutes (1–40320)", reason="Reason")
+async def timeout(interaction: discord.Interaction, member: discord.Member, minutes: app_commands.Range[int, 1, 40320], reason: str):
+    if not await require_moderator(interaction): return
+    if member.id == interaction.user.id or member.guild_permissions.administrator:
+        return await interaction.response.send_message("You cannot timeout yourself or an administrator.", ephemeral=True)
+    await member.timeout(timedelta(minutes=minutes), reason=f"{interaction.user}: {reason}")
+    await interaction.response.send_message(f"Timed out {member.mention} for {minutes} minute(s).", ephemeral=True)
+    await send_modlog(interaction.guild, "Member Timed Out", f"Member: {member.mention}\nDuration: {minutes} minutes\nReason: {reason}", interaction.user)
+    try:
+        await member.send(f"You were timed out in **{interaction.guild.name}** for {minutes} minute(s).\nReason: {reason}")
+    except discord.Forbidden:
+        pass
+
+@bot.tree.command(name="untimeout", description="Remove a member's timeout")
+@app_commands.default_permissions(moderate_members=True)
+@app_commands.describe(member="Member to remove timeout from", reason="Reason")
+async def untimeout(interaction: discord.Interaction, member: discord.Member, reason: str = "Timeout removed by staff"):
+    if not await require_moderator(interaction): return
+    await member.timeout(None, reason=f"{interaction.user}: {reason}")
+    await interaction.response.send_message(f"Removed timeout for {member.mention}.", ephemeral=True)
+    await send_modlog(interaction.guild, "Timeout Removed", f"Member: {member.mention}\nReason: {reason}", interaction.user)
+
+@bot.tree.command(name="kick", description="Kick a member from the server")
+@app_commands.default_permissions(kick_members=True)
+@app_commands.describe(member="Member to kick", reason="Reason")
+async def kick(interaction: discord.Interaction, member: discord.Member, reason: str):
+    if not await require_moderator(interaction): return
+    if member.id == interaction.user.id or member.guild_permissions.administrator:
+        return await interaction.response.send_message("You cannot kick yourself or an administrator.", ephemeral=True)
+    await member.kick(reason=f"{interaction.user}: {reason}")
+    await interaction.response.send_message(f"Kicked {member.mention}.", ephemeral=True)
+    await send_modlog(interaction.guild, "Member Kicked", f"Member: {member.mention}\nReason: {reason}", interaction.user)
+
+@bot.tree.command(name="ban", description="Ban a member from the server")
+@app_commands.default_permissions(ban_members=True)
+@app_commands.describe(member="Member to ban", reason="Reason")
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str):
+    if not await require_moderator(interaction): return
+    if member.id == interaction.user.id or member.guild_permissions.administrator:
+        return await interaction.response.send_message("You cannot ban yourself or an administrator.", ephemeral=True)
+    await member.ban(reason=f"{interaction.user}: {reason}", delete_message_seconds=0)
+    await interaction.response.send_message(f"Banned {member.mention}.", ephemeral=True)
+    await send_modlog(interaction.guild, "Member Banned", f"Member: {member.mention}\nReason: {reason}", interaction.user)
+
+@bot.tree.command(name="unban", description="Unban a user by their Discord ID")
+@app_commands.default_permissions(ban_members=True)
+@app_commands.describe(user_id="Discord user ID", reason="Reason")
+async def unban(interaction: discord.Interaction, user_id: str, reason: str = "Unban requested by staff"):
+    if not await require_moderator(interaction): return
+    try:
+        target = discord.Object(id=int(user_id.strip()))
+        await interaction.guild.unban(target, reason=f"{interaction.user}: {reason}")
+    except (ValueError, discord.NotFound):
+        return await interaction.response.send_message("That user ID is invalid or not currently banned.", ephemeral=True)
+    await interaction.response.send_message(f"Unbanned user ID {user_id}.", ephemeral=True)
+    await send_modlog(interaction.guild, "Member Unbanned", f"User ID: {user_id}\nReason: {reason}", interaction.user)
+
+@bot.tree.command(name="purge", description="Delete recent messages in this channel")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(amount="Number of messages to delete (1–100)")
+async def purge(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100]):
+    if not await require_moderator(interaction): return
+    if not isinstance(interaction.channel, discord.TextChannel):
+        return await interaction.response.send_message("Use this command in a text channel.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount, reason=f"Purged by {interaction.user}")
+    await interaction.followup.send(f"Deleted {len(deleted)} message(s).", ephemeral=True)
+    await send_modlog(interaction.guild, "Messages Purged", f"Channel: {interaction.channel.mention}\nDeleted: {len(deleted)} message(s)", interaction.user)
 
 @bot.tree.command(name="ticketsetup", description="Configure the support ticket system")
 @app_commands.default_permissions(administrator=True)
