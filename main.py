@@ -978,7 +978,8 @@ async def staffactivity(interaction: discord.Interaction, limit: app_commands.Ra
     embed = discord.Embed(title="🧾 Oman Air | Recent Staff Activity", description="\n\n".join(lines)[:4000] or "No activity recorded yet.", color=discord.Color.from_rgb(0, 45, 90))
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-\nbot.tree.add_command(flight_group)
+
+bot.tree.add_command(flight_group)
 
 # Persistent component views are registered at startup.
 async def setup_views():
