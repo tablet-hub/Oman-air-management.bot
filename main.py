@@ -31,12 +31,14 @@ def _brand_message_kwargs(kwargs):
         kwargs["content"] = content + "\n\n" + BRAND_SIGNATURE
     embed = kwargs.get("embed")
     if isinstance(embed, discord.Embed):
-        embed.set_footer(text="Oman Air", icon_url=OMAN_AIR_LOGO_URL)\n        embed.set_author(name="A oneworld partner", icon_url=ONEWORLD_LOGO_URL)
+        embed.set_footer(text="Oman Air", icon_url=OMAN_AIR_LOGO_URL)
+        embed.set_author(name="A oneworld partner", icon_url=ONEWORLD_LOGO_URL)
     embeds = kwargs.get("embeds")
     if embeds:
         for item in embeds:
             if isinstance(item, discord.Embed):
-                item.set_footer(text="Oman Air", icon_url=OMAN_AIR_LOGO_URL)\n                item.set_author(name="A oneworld partner", icon_url=ONEWORLD_LOGO_URL)
+                item.set_footer(text="Oman Air", icon_url=OMAN_AIR_LOGO_URL)
+                item.set_author(name="A oneworld partner", icon_url=ONEWORLD_LOGO_URL)
     return kwargs
 
 _original_messageable_send = discord.abc.Messageable.send
