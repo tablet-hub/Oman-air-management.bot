@@ -1780,6 +1780,60 @@ async def robloxconfirm(interaction: discord.Interaction):
         log.exception("Roblox verification confirmation failed")
         await interaction.followup.send("Roblox's verification service couldn't be reached right now. Please try again later.", ephemeral=True)
 
+@bot.tree.command(name="poll", description="Create a poll with reaction voting")
+@app_commands.describe(
+    question="What should members vote on?",
+    option1="First choice",
+    option2="Second choice",
+    option3="Third choice (optional)",
+    option4="Fourth choice (optional)",
+    channel="Channel to publish the poll (defaults to this channel)"
+)
+async def create_poll(
+    interaction: discord.Interaction,
+    question: str,
+    option1: str,
+    option2: str,
+    option3: str = None,
+    option4: str = None,
+    channel: discord.TextChannel = None
+):
+    if not interaction.guild:
+        return await interaction.response.send_message("Create polls from a server channel.", ephemeral=True)
+    target = channel or interaction.channel
+    if not isinstance(target, discord.TextChannel) or target.guild.id != interaction.guild.id:
+        return await interaction.response.send_message("Choose a text channel in this server.", ephemeral=True)
+    if not question.strip() or len(question) > 240:
+        return await interaction.response.send_message("The poll question must be 1–240 characters.", ephemeral=True)
+    options = [option.strip() for option in (option1, option2, option3, option4) if option and option.strip()]
+    if len(options) < 2 or any(len(option) > 100 for option in options):
+        return await interaction.response.send_message("Provide 2–4 choices, each no longer than 100 characters.", ephemeral=True)
+    if len(set(option.casefold() for option in options)) != len(options):
+        return await interaction.response.send_message("Each poll choice must be different.", ephemeral=True)
+    perms = target.permissions_for(interaction.guild.me)
+    if not perms.send_messages or not perms.embed_links or not perms.add_reactions:
+        return await interaction.response.send_message("I need Send Messages, Embed Links, and Add Reactions permissions in that channel.", ephemeral=True)
+
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
+    embed = discord.Embed(
+        title="📊 " + question.strip(),
+        description="\n".join(f"{emojis[index]} {choice}" for index, choice in enumerate(options)),
+        color=discord.Color.from_rgb(0, 45, 90),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="Voting", value="React with the emoji beside your choice. One reaction per poll.", inline=False)
+    embed.set_footer(text=f"Poll created by {interaction.user.display_name} • Oman Air")
+    try:
+        message = await target.send(embed=embed)
+        for emoji in emojis[:len(options)]:
+            await message.add_reaction(emoji)
+    except discord.Forbidden:
+        return await interaction.response.send_message("I cannot publish or add reactions in that channel. Check my permissions.", ephemeral=True)
+    except discord.HTTPException:
+        log.exception("Poll publishing failed")
+        return await interaction.response.send_message("Discord couldn't publish the poll. Please try again.", ephemeral=True)
+    await interaction.response.send_message(f"Poll published in {target.mention}!", ephemeral=True)
+
 bot.tree.add_command(flight_group)
 bot.tree.add_command(aircraft_group)
 
