@@ -697,6 +697,16 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
         flight["gate"] = gate.strip()[:50]
     flight["updated_at"] = discord.utils.utcnow().isoformat()
     flight["updated_by"] = interaction.user.id
+    miles_awarded_now = 0
+    if normalized == "Arrived":
+        for booking in cfg.setdefault("bookings", {}).values():
+            if booking.get("flight_number") == key and booking.get("status") != "Cancelled" and not booking.get("skymiles_awarded"):
+                passenger_id = str(booking.get("passenger_id"))
+                balances = cfg.setdefault("skymiles", {})
+                balances[passenger_id] = int(balances.get(passenger_id, 0)) + 1000
+                booking["skymiles_awarded"] = 1000
+                booking["skymiles_awarded_at"] = discord.utils.utcnow().isoformat()
+                miles_awarded_now += 1
     save_data(data)
     channel_id = cfg.get("flight_announcement_channel_id")
     channel = interaction.guild.get_channel(channel_id) if channel_id else None
@@ -704,7 +714,8 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
         return await interaction.response.send_message("Flight updated in storage, but announcement channel is not configured. Run /flightsetup.", ephemeral=True)
     embed = flight_embed(interaction.guild, flight, title=f"📣 OMAN AIR | FLIGHT UPDATE — {key}")
     await channel.send(content="@everyone", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
-    await interaction.response.send_message(f"Published update for **{key}**: **{normalized}**.", ephemeral=True)
+    miles_note = f" Awarded 1,000 SkyMiles to {miles_awarded_now} passenger(s)." if miles_awarded_now else ""
+    await interaction.response.send_message(f"Published update for **{key}**: **{normalized}**.{miles_note}", ephemeral=True)
 
 @flight_group.command(name="list", description="List scheduled flights")
 @app_commands.default_permissions(manage_guild=True)
@@ -970,6 +981,39 @@ async def boardpassenger(interaction: discord.Interaction, booking_reference: st
     save_data(data)
     await audit_log(interaction.guild, interaction.user, "Passenger boarded", f"Flight {booking['flight_number']} • Booking {booking['reference']} • Passenger <@{booking['passenger_id']}>")
     await interaction.response.send_message(f"Passenger <@{booking['passenger_id']}> marked as boarded for **{booking['flight_number']}**.", ephemeral=True)
+
+@bot.tree.command(name="mymiles", description="Member: view your Oman Air SkyMiles balance")
+async def mymiles(interaction: discord.Interaction):
+    if not interaction.guild:
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    cfg = guild_data(interaction.guild.id)
+    balance = int(cfg.get("skymiles", {}).get(str(interaction.user.id), 0))
+    embed = discord.Embed(title="💳 Oman Air | SkyMiles", description=f"{interaction.user.mention}, you have **{balance:,} SkyMiles**.", color=discord.Color.from_rgb(0, 45, 90))
+    embed.set_footer(text="Earn 1,000 SkyMiles when a flight you booked is marked Arrived.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="milesadjust", description="Staff: add or remove SkyMiles from a passenger account")
+@app_commands.describe(member="Passenger account", amount="Miles to add or remove (positive or negative)", reason="Reason for the adjustment")
+async def milesadjust(interaction: discord.Interaction, member: discord.Member, amount: app_commands.Range[int, -1000000, 1000000], reason: str):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in your server.", ephemeral=True)
+    cfg = guild_data(interaction.guild.id)
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Only configured Oman Air staff can adjust SkyMiles.", ephemeral=True)
+    balances = cfg.setdefault("skymiles", {})
+    key = str(member.id)
+    current = int(balances.get(key, 0))
+    updated = current + amount
+    if updated < 0:
+        return await interaction.response.send_message("That adjustment would make the passenger's balance negative.", ephemeral=True)
+    balances[key] = updated
+    data = load_data()
+    data.setdefault(str(interaction.guild.id), {})["skymiles"] = balances
+    save_data(data)
+    await audit_log(interaction.guild, interaction.user, "SkyMiles adjusted", f"{amount:+,} miles for {member} ({member.id}). Reason: {reason.strip()[:300]}")
+    await interaction.response.send_message(f"Updated {member.mention}'s balance: **{updated:,} SkyMiles** ({amount:+,}).", ephemeral=True)
+
 
 @bot.tree.command(name="flightdashboard", description="Staff: view the Oman Air flight operations dashboard")
 async def flightdashboard(interaction: discord.Interaction):
