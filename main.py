@@ -1380,7 +1380,8 @@ async def mileshopanel(interaction: discord.Interaction):
 
 # Persistent component views are registered at startup.
 async def setup_views():
-    bot.add_view(MilesShopPanelView())\n    bot.add_view(MilesShopView())\n    bot.add_view(TicketPanel())
+    bot.add_view(MilesShopPanelView())
+    bot.add_view(MilesShopView())\n    bot.add_view(TicketPanel())
     bot.add_view(TicketControls())
     bot.add_view(TicketStaffTools())
     # Register persistent booking buttons from saved flights before Discord connects.
