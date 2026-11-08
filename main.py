@@ -682,8 +682,8 @@ async def require_flight_staff(interaction: discord.Interaction) -> bool:
     return True
 
 @aircraft_group.command(name="add", description="Register an aircraft in the virtual fleet")
-@app_commands.describe(registration="Unique aircraft registration, e.g. A4O-BA", model="Aircraft model", capacity="Passenger seat capacity")
-async def aircraft_add(interaction: discord.Interaction, registration: str, model: str, capacity: app_commands.Range[int, 1, 1000]):
+@app_commands.describe(registration="Unique aircraft registration, e.g. A4O-BA", model="Aircraft model", capacity="Passenger seat capacity", routes="Allowed routes separated by commas, e.g. MCT-LHR, MCT-DXB")
+async def aircraft_add(interaction: discord.Interaction, registration: str, model: str, capacity: app_commands.Range[int, 1, 1000], routes: str = "Not specified"):
     if not await require_flight_staff(interaction):
         return
     registration = registration.strip().upper()
@@ -697,6 +697,7 @@ async def aircraft_add(interaction: discord.Interaction, registration: str, mode
         return await interaction.response.send_message(f"Aircraft **{registration}** is already registered.", ephemeral=True)
     fleet[registration] = {
         "registration": registration, "model": model, "capacity": capacity,
+        "routes": [route.strip().upper() for route in routes.split(",") if route.strip()][:20] if routes.strip().lower() != "not specified" else [],
         "status": "Available", "created_by": interaction.user.id,
         "created_at": discord.utils.utcnow().isoformat()
     }
@@ -735,7 +736,7 @@ async def aircraft_list(interaction: discord.Interaction, channel: discord.TextC
     for aircraft in aircraft_items[:24]:
         embed.add_field(
             name=f"{aircraft.get('registration', 'Unknown')} • {aircraft.get('status', 'Unknown')}",
-            value=f"**Model:** {aircraft.get('model', 'Not set')}\n**Seat capacity:** {aircraft.get('capacity', 'Not set')}",
+            value=f"**Model:** {aircraft.get('model', 'Not set')}\n**Seat capacity:** {aircraft.get('capacity', 'Not set')}\n**Routes:** {', '.join(aircraft.get('routes', [])) or 'Not specified'}",
             inline=False
         )
     if len(aircraft_items) > 24:
@@ -783,6 +784,26 @@ async def aircraft_update(interaction: discord.Interaction, registration: str, s
     save_data(data)
     await interaction.response.send_message(f"Updated **{key}**: status **{normalized}**, capacity **{aircraft.get('capacity')}**.", ephemeral=True)
 
+@aircraft_group.command(name="routes", description="Set the routes an aircraft is approved for")
+@app_commands.describe(registration="Aircraft registration", routes="Comma-separated routes, e.g. MCT-LHR, MCT-DXB")
+async def aircraft_routes(interaction: discord.Interaction, registration: str, routes: str):
+    if not await require_flight_staff(interaction):
+        return
+    key = registration.strip().upper()
+    parsed_routes = [route.strip().upper() for route in routes.split(",") if route.strip()]
+    if len(parsed_routes) > 20 or any(len(route) > 40 for route in parsed_routes):
+        return await interaction.response.send_message("Enter up to 20 routes, each no longer than 40 characters.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    aircraft = aircraft_store(cfg).get(key)
+    if not aircraft:
+        return await interaction.response.send_message(f"Aircraft **{key}** was not found.", ephemeral=True)
+    aircraft["routes"] = parsed_routes
+    aircraft["updated_at"] = discord.utils.utcnow().isoformat()
+    aircraft["updated_by"] = interaction.user.id
+    save_data(data)
+    await interaction.response.send_message(f"Updated routes for **{key}**: {', '.join(parsed_routes) if parsed_routes else 'No routes listed'}.", ephemeral=True)
+
 @aircraft_group.command(name="assign", description="Assign an available aircraft to an existing flight")
 @app_commands.describe(flight_number="Flight to assign", registration="Registered aircraft")
 async def aircraft_assign(interaction: discord.Interaction, flight_number: str, registration: str):
@@ -802,6 +823,11 @@ async def aircraft_assign(interaction: discord.Interaction, flight_number: str, 
         return await interaction.response.send_message("Aircraft cannot be assigned to a cancelled or departed flight.", ephemeral=True)
     if aircraft.get("status") != "Available":
         return await interaction.response.send_message(f"Aircraft **{registration_key}** is currently **{aircraft.get('status')}**.", ephemeral=True)
+    allowed_routes = aircraft.get("routes", [])
+    if allowed_routes:
+        actual_route = f"{flight.get('origin', '').strip().upper()}-{flight.get('destination', '').strip().upper()}"
+        if actual_route not in allowed_routes:
+            return await interaction.response.send_message(f"Route **{actual_route}** is not listed for aircraft **{registration_key}**. Allowed routes: {', '.join(allowed_routes)}.", ephemeral=True)
     conflict = next((f for f in cfg.get("flights", {}).values()
                      if f.get("flight_number") != flight_key
                      and f.get("aircraft", "").strip().upper() == registration_key
