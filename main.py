@@ -21,6 +21,7 @@ if not GUILD_ID:
 
 # Create the bot before registering slash commands.
 intents = discord.Intents.default()
+intents.members = True  # Required to receive member-join events.
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 def load_data():
@@ -300,6 +301,47 @@ class TicketControls(discord.ui.View):
         update_ticket(interaction.guild.id, interaction.channel_id, "close_reason", "Closed by ticket owner")
         await interaction.response.send_message("Ticket closed. This channel will be deleted shortly.")
         await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
+
+@bot.tree.command(name="welcomesetup", description="Set the channel for automatic member welcome messages")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Channel where new members should be welcomed")
+async def welcomesetup(interaction: discord.Interaction, channel: discord.TextChannel):
+    data = load_data()
+    cfg = data.setdefault(str(interaction.guild_id), {})
+    cfg["welcome_channel_id"] = channel.id
+    save_data(data)
+    await interaction.response.send_message(
+        f"Automatic welcome messages are now enabled in {channel.mention}.",
+        ephemeral=True
+    )
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    cfg = guild_data(member.guild.id)
+    channel_id = cfg.get("welcome_channel_id")
+    if not channel_id:
+        return
+    channel = member.guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        log.warning("Configured welcome channel %s was not found in guild %s", channel_id, member.guild.id)
+        return
+    embed = discord.Embed(
+        title="✈️ Welcome to Oman Air!",
+        description=(
+            f"Welcome aboard, {member.mention}! We're glad you've joined **{member.guild.name}**.\n\n"
+            "Please take a moment to read the server rules and get familiar with our community. "
+            "If you need assistance, our support ticket system is here to help."
+        ),
+        color=discord.Color.from_rgb(0, 45, 90)
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Member", value=member.mention, inline=True)
+    embed.add_field(name="Member number", value=str(member.guild.member_count or "—"), inline=True)
+    embed.set_footer(text="Oman Air • Virtual Aviation Community")
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        log.error("Missing permission to send welcome message in channel %s", channel.id)
 
 @bot.tree.command(name="ticketsetup", description="Configure the support ticket system")
 @app_commands.default_permissions(administrator=True)
