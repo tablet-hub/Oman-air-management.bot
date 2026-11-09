@@ -667,6 +667,63 @@ flight_group = app_commands.Group(name="flight", description="Manage Oman Air fl
 
 aircraft_group = app_commands.Group(name="aircraft", description="Manage the Oman Air virtual aircraft fleet")
 
+crew_group = app_commands.Group(name="crew", description="Manage Oman Air virtual crew members")
+
+def crew_store(cfg: dict) -> dict:
+    return cfg.setdefault("crew", {})
+
+@crew_group.command(name="add", description="Register a crew member in the staff roster")
+@app_commands.describe(member="Discord member to register", role="Crew position, e.g. Pilot, Cabin Crew, Dispatcher", employee_id="Optional virtual employee ID")
+async def crew_add(interaction: discord.Interaction, member: discord.Member, role: str, employee_id: str = None):
+    if not await require_flight_staff(interaction):
+        return
+    role = role.strip()
+    employee_id = (employee_id or "").strip().upper()
+    if not role or len(role) > 60 or len(employee_id) > 24:
+        return await interaction.response.send_message("Enter a crew position (1–60 characters) and an employee ID up to 24 characters.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    roster = crew_store(cfg)
+    member_key = str(member.id)
+    if member_key in roster:
+        return await interaction.response.send_message(f"{member.mention} is already registered. Use /crew profile to view their record.", ephemeral=True)
+    if employee_id and any(str(record.get("employee_id", "")).upper() == employee_id for record in roster.values()):
+        return await interaction.response.send_message(f"Employee ID **{employee_id}** is already in use.", ephemeral=True)
+    roster[member_key] = {"member_id": member.id, "display_name": member.display_name, "role": role, "employee_id": employee_id or "Not assigned", "availability": "Available", "assigned_flights": [], "registered_by": interaction.user.id, "registered_at": discord.utils.utcnow().isoformat()}
+    save_data(data)
+    await interaction.response.send_message(f"Registered {member.mention} as **{role}**. Employee ID: **{employee_id or 'Not assigned'}**.", ephemeral=True)
+
+@crew_group.command(name="list", description="View the registered crew roster")
+async def crew_list(interaction: discord.Interaction):
+    if not await require_flight_staff(interaction):
+        return
+    roster = load_data().get(str(STAFF_GUILD_ID), {}).get("crew", {})
+    if not roster:
+        return await interaction.response.send_message("The crew roster is empty. Use /crew add to register crew.", ephemeral=True)
+    embed = discord.Embed(title="✈️ Oman Air | Crew Roster", description=f"Registered crew: **{len(roster)}**", color=discord.Color.from_rgb(0, 45, 90))
+    for record in list(roster.values())[:25]:
+        embed.add_field(name=f"{record.get('display_name', 'Crew member')} • {record.get('role', 'Unassigned')}", value=f"Employee ID: {record.get('employee_id', 'Not assigned')}\nAvailability: {record.get('availability', 'Available')}\nDiscord: <@{record.get('member_id', 0)}>", inline=False)
+    if len(roster) > 25:
+        embed.set_footer(text=f"Showing 25 of {len(roster)} crew members.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@crew_group.command(name="profile", description="View a crew member's roster profile")
+@app_commands.describe(member="Crew member to view")
+async def crew_profile(interaction: discord.Interaction, member: discord.Member):
+    if not await require_flight_staff(interaction):
+        return
+    record = load_data().get(str(STAFF_GUILD_ID), {}).get("crew", {}).get(str(member.id))
+    if not record:
+        return await interaction.response.send_message(f"{member.mention} is not registered in the crew roster.", ephemeral=True)
+    embed = discord.Embed(title=f"✈️ Crew Profile | {record.get('display_name', member.display_name)}", color=discord.Color.from_rgb(0, 45, 90))
+    embed.add_field(name="Position", value=record.get("role", "Unassigned"), inline=True)
+    embed.add_field(name="Employee ID", value=record.get("employee_id", "Not assigned"), inline=True)
+    embed.add_field(name="Availability", value=record.get("availability", "Available"), inline=True)
+    embed.add_field(name="Assigned flights", value=", ".join(record.get("assigned_flights", [])) or "None", inline=False)
+    embed.add_field(name="Registered", value=record.get("registered_at", "Unknown")[:10], inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 def aircraft_store(cfg: dict) -> dict:
     return cfg.setdefault("aircraft", {})
 
@@ -1847,6 +1904,7 @@ async def create_poll(
 
 bot.tree.add_command(flight_group)
 bot.tree.add_command(aircraft_group)
+bot.tree.add_command(crew_group)
 
 # ---------------- SkyMiles Shop Panel ----------------
 
