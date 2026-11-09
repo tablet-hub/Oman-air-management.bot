@@ -707,6 +707,59 @@ async def crew_list(interaction: discord.Interaction):
         embed.set_footer(text=f"Showing 25 of {len(roster)} crew members.")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+@crew_group.command(name="assign", description="Assign an available crew member to a flight")
+@app_commands.describe(member="Registered crew member", flight_number="Existing flight number")
+async def crew_assign(interaction: discord.Interaction, member: discord.Member, flight_number: str):
+    if not await require_flight_staff(interaction):
+        return
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    roster = crew_store(cfg)
+    record = roster.get(str(member.id))
+    if not record:
+        return await interaction.response.send_message(f"{member.mention} is not registered. Use /crew add first.", ephemeral=True)
+    flight_key = flight_number.strip().upper()
+    flight = cfg.setdefault("flights", {}).get(flight_key)
+    if not flight:
+        return await interaction.response.send_message(f"Flight {flight_key} was not found.", ephemeral=True)
+    if flight.get("status") in ("Cancelled", "Departed", "Arrived", "Completed"):
+        return await interaction.response.send_message("Crew cannot be assigned to a cancelled or completed flight.", ephemeral=True)
+    if record.get("availability", "Available") != "Available":
+        return await interaction.response.send_message(f"{member.mention} is currently {record.get('availability')}.", ephemeral=True)
+    assigned = flight.setdefault("crew", [])
+    if member.id in assigned:
+        return await interaction.response.send_message(f"{member.mention} is already assigned to {flight_key}.", ephemeral=True)
+    assigned.append(member.id)
+    record.setdefault("assigned_flights", []).append(flight_key)
+    record["availability"] = "On Duty"
+    record["updated_at"] = discord.utils.utcnow().isoformat()
+    save_data(data)
+    await interaction.response.send_message(f"Assigned {member.mention} ({record.get('role', 'Crew')}) to {flight_key}. Their availability is now On Duty.", ephemeral=True)
+
+@crew_group.command(name="availability", description="Update a registered crew member's availability")
+@app_commands.describe(member="Registered crew member", status="Availability status")
+@app_commands.choices(status=[
+    app_commands.Choice(name="Available", value="Available"),
+    app_commands.Choice(name="Unavailable", value="Unavailable"),
+    app_commands.Choice(name="On Duty", value="On Duty")
+])
+async def crew_availability(interaction: discord.Interaction, member: discord.Member, status: app_commands.Choice[str]):
+    if not await require_flight_staff(interaction):
+        return
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    record = crew_store(cfg).get(str(member.id))
+    if not record:
+        return await interaction.response.send_message(f"{member.mention} is not registered in the crew roster.", ephemeral=True)
+    if status.value == "Available" and record.get("assigned_flights"):
+        active = [number for number in record["assigned_flights"] if cfg.get("flights", {}).get(number, {}).get("status") not in ("Cancelled", "Arrived", "Completed")]
+        if active:
+            return await interaction.response.send_message(f"Cannot mark {member.mention} Available while assigned to active flights: {', '.join(active[:10])}. Remove or complete those assignments first.", ephemeral=True)
+    record["availability"] = status.value
+    record["updated_at"] = discord.utils.utcnow().isoformat()
+    save_data(data)
+    await interaction.response.send_message(f"Updated {member.mention}'s availability to {status.value}.", ephemeral=True)
+
 @crew_group.command(name="profile", description="View a crew member's roster profile")
 @app_commands.describe(member="Crew member to view")
 async def crew_profile(interaction: discord.Interaction, member: discord.Member):
