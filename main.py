@@ -1600,10 +1600,11 @@ async def ask_oman_air(interaction: discord.Interaction, question: str):
                 contents=conversation,
                 config=types.GenerateContentConfig(
                     system_instruction=CHATBOT_INSTRUCTIONS,
-                    max_output_tokens=450
+                    max_output_tokens=450,
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW")
                 )
             ),
-            timeout=30
+            timeout=60
         )
         answer = (response.text or "").strip()
         if not answer:
@@ -1614,9 +1615,9 @@ async def ask_oman_air(interaction: discord.Interaction, question: str):
         ])[-10:]
         await interaction.followup.send(answer[:1900], ephemeral=True)
     except asyncio.TimeoutError:
-        log.error("Oman Air Gemini chatbot request timed out after 30 seconds")
+        log.error("Oman Air Gemini chatbot request timed out after 60 seconds")
         await interaction.followup.send(
-            "Gemini took too long to respond (30 seconds). Please try again. Staff should check Railway logs and Gemini API settings if this repeats.",
+            "Gemini took too long to respond (60 seconds). Please try again. Staff should check Railway logs and Gemini API settings if this repeats.",
             ephemeral=True
         )
     except Exception:
