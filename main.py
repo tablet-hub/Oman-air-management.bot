@@ -1780,6 +1780,7 @@ async def robloxconfirm(interaction: discord.Interaction):
         log.exception("Roblox verification confirmation failed")
         await interaction.followup.send("Roblox's verification service couldn't be reached right now. Please try again later.", ephemeral=True)
 
+@app_commands.guilds(discord.Object(id=MAIN_GUILD_ID))
 @bot.tree.command(name="poll", description="Create a poll with reaction voting")
 @app_commands.describe(
     question="What should members vote on?",
