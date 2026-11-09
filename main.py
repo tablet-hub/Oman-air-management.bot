@@ -1594,13 +1594,16 @@ async def ask_oman_air(interaction: discord.Interaction, question: str):
     conversation = history[-8:] + [{"role": "user", "parts": [{"text": question}]}]
 
     try:
-        response = await gemini_client.aio.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=conversation,
-            config=types.GenerateContentConfig(
-                system_instruction=CHATBOT_INSTRUCTIONS,
-                max_output_tokens=450
-            )
+        response = await asyncio.wait_for(
+            gemini_client.aio.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=conversation,
+                config=types.GenerateContentConfig(
+                    system_instruction=CHATBOT_INSTRUCTIONS,
+                    max_output_tokens=450
+                )
+            ),
+            timeout=30
         )
         answer = (response.text or "").strip()
         if not answer:
@@ -1610,10 +1613,16 @@ async def ask_oman_air(interaction: discord.Interaction, question: str):
             {"role": "model", "parts": [{"text": answer}]}
         ])[-10:]
         await interaction.followup.send(answer[:1900], ephemeral=True)
+    except asyncio.TimeoutError:
+        log.error("Oman Air Gemini chatbot request timed out after 30 seconds")
+        await interaction.followup.send(
+            "Gemini took too long to respond (30 seconds). Please try again. Staff should check Railway logs and Gemini API settings if this repeats.",
+            ephemeral=True
+        )
     except Exception:
         log.exception("Oman Air Gemini chatbot request failed")
         await interaction.followup.send(
-            "Sorry, the AI assistant is temporarily unavailable. Please try again later or contact staff.",
+            "Sorry, the AI assistant request failed. Staff should check Railway logs for the Gemini error (API key, model access, or quota).",
             ephemeral=True
         )
 
