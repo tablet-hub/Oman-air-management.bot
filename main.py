@@ -1094,6 +1094,7 @@ async def flight_create(interaction: discord.Interaction, flight_number: str, or
         "created_at": discord.utils.utcnow().isoformat()
     }
     flights[flight_number] = flight
+    record_flight_history(cfg, flight, "Flight created", interaction.user.id)
     save_data(data)
     if not await post_flight_announcement(interaction.guild, flight):
         return await interaction.response.send_message("Flight saved, but no announcement channel is configured. Run /flightsetup first.", ephemeral=True)
@@ -1121,6 +1122,7 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
         flight["gate"] = gate.strip()[:50]
     flight["updated_at"] = discord.utils.utcnow().isoformat()
     flight["updated_by"] = interaction.user.id
+    record_flight_history(cfg, flight, "Flight updated", interaction.user.id, f"Status set to {normalized}; gate: {flight.get('gate', 'TBA')}")
     miles_awarded_now = 0
     if normalized == "Arrived":
         for booking in cfg.setdefault("bookings", {}).values():
@@ -1196,6 +1198,7 @@ async def flight_cancel(interaction: discord.Interaction, flight_number: str, re
     flight["status"] = "Cancelled"
     flight["cancellation_reason"] = reason.strip()[:500]
     flight["updated_at"] = discord.utils.utcnow().isoformat()
+    record_flight_history(cfg, flight, "Flight cancelled", interaction.user.id, reason.strip()[:500])
     save_data(data)
     main_guild = bot.get_guild(MAIN_GUILD_ID)
     channel = main_guild.get_channel(MAIN_ANNOUNCEMENT_CHANNEL_ID) if main_guild else None
@@ -1281,6 +1284,25 @@ async def audit_log(guild: discord.Guild, actor: discord.abc.User, action: str, 
             await channel.send(embed=embed)
         except discord.Forbidden:
             log.warning("Cannot post staff log in channel %s", log_channel_id)
+
+def record_flight_history(cfg: dict, flight: dict, action: str, actor_id: int = 0, details: str = ""):
+    """Append a compact, persistent audit event for a flight."""
+    history = cfg.setdefault("flight_history", [])
+    history.append({
+        "flight_number": flight.get("flight_number", "UNKNOWN"),
+        "action": action,
+        "status": flight.get("status", "Unknown"),
+        "origin": flight.get("origin", ""),
+        "destination": flight.get("destination", ""),
+        "departure": flight.get("departure", ""),
+        "gate": flight.get("gate", "TBA"),
+        "actor_id": int(actor_id or 0),
+        "details": str(details)[:500],
+        "timestamp": discord.utils.utcnow().isoformat()
+    })
+    # Keep the most recent 2,000 events to prevent unbounded JSON growth.
+    del history[:-2000]
+
 
 def get_flight(cfg: dict, flight_number: str):
     return cfg.get("flights", {}).get(flight_number.strip().upper())
@@ -2086,7 +2108,11 @@ async def opscenter(interaction: discord.Interaction):
         timestamp=discord.utils.utcnow())
     embed.add_field(name="Flights", value=f"**{len(flights)}** total\n**{len(active)}** active\n**{sum(f.get('status') == 'Delayed' for f in flights)}** delayed", inline=True)
     embed.add_field(name="Passengers", value=f"**{len(open_bookings)}** active bookings\n**{sum(bool(b.get('checked_in')) for b in open_bookings)}** checked in\n**{sum(bool(b.get('boarded')) for b in open_bookings)}** boarded", inline=True)
+    history = cfg.get("flight_history", [])
+    completed = sum(f.get("status") in ("Arrived", "Completed") for f in flights)
+    cancelled = sum(f.get("status") == "Cancelled" for f in flights)
     embed.add_field(name="Resources", value=f"**{len(aircraft)}** aircraft\n**{len(crew)}** crew\n**{sum(x.get('availability') == 'Available' for x in crew)}** available crew", inline=True)
+    embed.add_field(name="Flight history", value=f"**{len(history)}** recorded events\n**{completed}** completed flights\n**{cancelled}** cancelled flights", inline=True)
     lines = []
     for f in pending[:12]:
         count = sum(b.get("flight_number") == f.get("flight_number") and b.get("status") != "Cancelled" for b in bookings)
@@ -2100,6 +2126,38 @@ async def opscenter(interaction: discord.Interaction):
             alerts.append(f"{f.get('flight_number')}: crew not assigned")
     embed.add_field(name="Operational checks", value="\n".join(alerts[:10]) or "No missing aircraft or crew assignments detected.", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="flighthistory", description="Staff: view recent flight history and status changes")
+@app_commands.describe(flight_number="Optional flight number to filter")
+async def flighthistory(interaction: discord.Interaction, flight_number: str = ""):
+    if not _staff_only_here(interaction):
+        return await interaction.response.send_message("Staff server administrators or managers only.", ephemeral=True)
+    cfg = operations_data()
+    history = cfg.get("flight_history", [])
+    key = flight_number.strip().upper()
+    if key:
+        history = [event for event in history if event.get("flight_number", "").upper() == key]
+    history = history[-15:][::-1]
+    if not history:
+        return await interaction.response.send_message("No flight history events found." + (f" for **{key}**." if key else "."), ephemeral=True)
+    embed = discord.Embed(title=f"📚 Oman Air | Flight History{(' — ' + key) if key else ''}",
+                          description="Most recent events first. New events are saved automatically.",
+                          color=discord.Color.from_rgb(0, 45, 90), timestamp=discord.utils.utcnow())
+    for event in history:
+        stamp = event.get("timestamp", "Unknown time")
+        try:
+            stamp = discord.utils.format_dt(discord.utils.parse_time(stamp), style="R")
+        except Exception:
+            pass
+        detail = event.get("details", "")
+        value = f"**Status:** {event.get('status', 'Unknown')}\n**Route:** {event.get('origin','?')} → {event.get('destination','?')}\n**Departure:** {event.get('departure','TBA')} · **Gate:** {event.get('gate','TBA')}\n**When:** {stamp}"
+        if detail:
+            value += f"\n**Details:** {detail}"
+        if event.get("actor_id"):
+            value += f"\n**Updated by:** <@{event['actor_id']}>"
+        embed.add_field(name=f"{event.get('flight_number','?')} · {event.get('action','Event')}"[:256], value=value[:1024], inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 @bot.tree.command(name="opsreport", description="Staff: view flight and passenger performance reports")
 async def opsreport(interaction: discord.Interaction):
