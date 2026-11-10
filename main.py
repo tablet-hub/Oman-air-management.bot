@@ -2345,29 +2345,73 @@ async def boardingstatus(interaction: discord.Interaction, flight_number: str):
         color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="staffapply", description="Member: submit an application to join the virtual airline staff")
-@app_commands.describe(position="Role you are applying for", experience="Relevant experience and why you are suitable")
-async def staffapply(interaction: discord.Interaction, position: str, experience: str):
+@bot.tree.command(name="staffappchannel", description="Staff: set the channel where applications are posted")
+@app_commands.describe(channel="Private staff channel for new applications")
+async def staffappchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this in the staff server.", ephemeral=True)
+    cfg = operations_data()
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Configured staff only.", ephemeral=True)
+    data = load_data()
+    staff_cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    staff_cfg["staff_application_channel_id"] = channel.id
+    save_data(data)
+    await interaction.response.send_message(f"New staff applications will be posted in {channel.mention}. Make sure this channel is private to staff.", ephemeral=True)
+
+
+@bot.tree.command(name="staffapply", description="Member: submit a private staff application")
+@app_commands.describe(
+    position="Role you are applying for",
+    experience="Any relevant experience (or write None)",
+    motivation="Why do you want to join Oman Air?",
+    availability="When are you usually available? Include your timezone.",
+    strengths="What skills or qualities would you bring to the team?",
+    teamwork="How would you handle a disagreement with another team member?",
+    commitment="How often can you participate in airline operations?"
+)
+async def staffapply(interaction: discord.Interaction, position: str, experience: str, motivation: str,
+                     availability: str, strengths: str, teamwork: str, commitment: str):
     if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
         return await interaction.response.send_message("Apply from the main server.", ephemeral=True)
-    if not position.strip() or len(position) > 80 or len(experience.strip()) < 20 or len(experience) > 1200:
-        return await interaction.response.send_message("Enter a position (max 80 characters) and an explanation of 20–1,200 characters.", ephemeral=True)
+    answers = {
+        "position": position.strip(), "experience": experience.strip(), "motivation": motivation.strip(),
+        "availability": availability.strip(), "strengths": strengths.strip(),
+        "teamwork": teamwork.strip(), "commitment": commitment.strip()
+    }
+    if (not all(answers.values()) or len(position) > 80 or
+        any(len(v) > 1000 for k, v in answers.items() if k != "position")):
+        return await interaction.response.send_message("Please answer every question. Keep the role under 80 characters and each other answer under 1,000 characters.", ephemeral=True)
     data = load_data()
     cfg = data.setdefault(str(STAFF_GUILD_ID), {})
     apps = cfg.setdefault("staff_applications", {})
     if any(int(x.get("member_id", 0)) == interaction.user.id and x.get("status") == "Pending" for x in apps.values()):
         return await interaction.response.send_message("You already have a pending staff application.", ephemeral=True)
-    ref = "APP-" + uuid.uuid4().hex[:7].upper()
-    apps[ref] = {"member_id": interaction.user.id, "position": position.strip(), "experience": experience.strip(),
-                 "status": "Pending", "submitted_at": discord.utils.utcnow().isoformat()}
-    save_data(data)
+    channel_id = cfg.get("staff_application_channel_id")
     staff_guild = bot.get_guild(STAFF_GUILD_ID)
-    if staff_guild:
-        try:
-            await staff_guild.owner.send(f"New Oman Air staff application **{ref}** from {interaction.user} for **{position.strip()}**. Review with /staffappreview.")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-    await interaction.response.send_message(f"Application **{ref}** submitted privately. Staff will review it.", ephemeral=True)
+    channel = staff_guild.get_channel(int(channel_id)) if staff_guild and channel_id else None
+    if not isinstance(channel, discord.TextChannel):
+        return await interaction.response.send_message("The staff application channel has not been configured yet. Please contact a server administrator.", ephemeral=True)
+    ref = "APP-" + uuid.uuid4().hex[:7].upper()
+    app = {"member_id": interaction.user.id, **answers, "status": "Pending",
+           "submitted_at": discord.utils.utcnow().isoformat()}
+    apps[ref] = app
+    save_data(data)
+    embed = discord.Embed(title=f"New Staff Application · {ref}", color=discord.Color.blue(),
+                          description=f"**Applicant:** {interaction.user.mention} ({interaction.user})\n**Applicant ID:** {interaction.user.id}\n**Position:** {position.strip()}\n**Status:** Pending")
+    labels = [("Experience", "experience"), ("Why Oman Air?", "motivation"),
+              ("Availability / timezone", "availability"), ("Skills and strengths", "strengths"),
+              ("Teamwork scenario", "teamwork"), ("Commitment", "commitment")]
+    for label, key in labels:
+        embed.add_field(name=label, value=answers[key][:1024], inline=False)
+    embed.set_footer(text=f"Review with /staffappreview · Reference: {ref}")
+    try:
+        await channel.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        apps.pop(ref, None)
+        save_data(data)
+        return await interaction.response.send_message("I couldn't post the application. Please tell staff to check the bot's View Channel and Send Messages permissions.", ephemeral=True)
+    await interaction.response.send_message(f"Your application **{ref}** has been submitted privately to the staff team.", ephemeral=True)
 
 @bot.tree.command(name="staffappreview", description="Staff: review and decide a staff application")
 @app_commands.describe(reference="Application reference", decision="Approve or reject", notes="Optional review notes")
