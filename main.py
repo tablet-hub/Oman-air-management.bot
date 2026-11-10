@@ -1143,8 +1143,28 @@ async def flightupdate(interaction: discord.Interaction, flight_number: str, sta
         return await interaction.response.send_message("Main-server announcement channel is unavailable. Check the bot is in both servers and can post there.", ephemeral=True)
     embed = flight_embed(main_guild, flight, title=f"📣 OMAN AIR | FLIGHT UPDATE — {key}")
     await channel.send(content="@everyone", embed=embed, allowed_mentions=discord.AllowedMentions(everyone=True))
+    # Automatically notify every active passenger by DM whenever flight status or gate is updated.
+    notified, dm_failed = 0, 0
+    passenger_ids = {int(b.get("passenger_id", 0)) for b in cfg.get("bookings", {}).values()
+                     if b.get("flight_number") == key and b.get("status") != "Cancelled"}
+    for passenger_id in passenger_ids:
+        member = main_guild.get_member(passenger_id)
+        if not member:
+            try:
+                member = await main_guild.fetch_member(passenger_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                dm_failed += 1
+                continue
+        try:
+            await member.send(embed=discord.Embed(
+                title=f"✈️ Oman Air | Flight update — {key}",
+                description=f"**Route:** {flight.get('origin','?')} → {flight.get('destination','?')}\n**Status:** {normalized}\n**Gate:** {flight.get('gate','TBA')}\n\nPlease check the main server announcement for details.",
+                color=discord.Color.from_rgb(0, 45, 90)))
+            notified += 1
+        except (discord.Forbidden, discord.HTTPException):
+            dm_failed += 1
     miles_note = f" Awarded 1,000 SkyMiles to {miles_awarded_now} passenger(s)." if miles_awarded_now else ""
-    await interaction.response.send_message(f"Published update for **{key}**: **{normalized}**.{miles_note}", ephemeral=True)
+    await interaction.response.send_message(f"Published update for **{key}**: **{normalized}**. Passenger DMs: **{notified}** delivered, **{dm_failed}** unavailable.{miles_note}", ephemeral=True)
 
 @flight_group.command(name="list", description="List scheduled flights")
 @app_commands.default_permissions(manage_guild=True)
