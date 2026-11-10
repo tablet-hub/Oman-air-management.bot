@@ -2038,6 +2038,197 @@ async def mileshopanel(interaction: discord.Interaction):
     await interaction.response.send_message("SkyMiles Shop panel published.", ephemeral=True)
 
 
+# ---------------- Operations Control Centre, crew scheduling and passenger self-service ----------------
+
+def _active_flight(flight):
+    return flight.get("status") not in ("Cancelled", "Arrived", "Completed")
+
+def _staff_only_here(interaction):
+    return bool(interaction.guild and interaction.guild.id == STAFF_GUILD_ID
+        and isinstance(interaction.user, discord.Member)
+        and (interaction.user.guild_permissions.administrator
+             or interaction.user.guild_permissions.manage_guild))
+
+@bot.tree.command(name="opscenter", description="Staff: open the live Operations Control Centre")
+async def opscenter(interaction: discord.Interaction):
+    if not _staff_only_here(interaction):
+        return await interaction.response.send_message("Staff server administrators or managers only.", ephemeral=True)
+    cfg = operations_data()
+    flights = list(cfg.get("flights", {}).values())
+    bookings = list(cfg.get("bookings", {}).values())
+    crew = list(cfg.get("crew", {}).values())
+    aircraft = list(cfg.get("aircraft", {}).values())
+    active = [f for f in flights if _active_flight(f)]
+    pending = [f for f in active if f.get("status", "Scheduled") in ("Scheduled", "Delayed", "Boarding")]
+    open_bookings = [b for b in bookings if b.get("status") != "Cancelled"]
+    embed = discord.Embed(title="🖥️ Oman Air | Operations Control Centre",
+        description="Live overview of virtual airline operations.", color=discord.Color.from_rgb(0, 45, 90),
+        timestamp=discord.utils.utcnow())
+    embed.add_field(name="Flights", value=f"**{len(flights)}** total\n**{len(active)}** active\n**{sum(f.get('status') == 'Delayed' for f in flights)}** delayed", inline=True)
+    embed.add_field(name="Passengers", value=f"**{len(open_bookings)}** active bookings\n**{sum(bool(b.get('checked_in')) for b in open_bookings)}** checked in\n**{sum(bool(b.get('boarded')) for b in open_bookings)}** boarded", inline=True)
+    embed.add_field(name="Resources", value=f"**{len(aircraft)}** aircraft\n**{len(crew)}** crew\n**{sum(x.get('availability') == 'Available' for x in crew)}** available crew", inline=True)
+    lines = []
+    for f in pending[:12]:
+        count = sum(b.get("flight_number") == f.get("flight_number") and b.get("status") != "Cancelled" for b in bookings)
+        lines.append(f"**{f.get('flight_number','—')}** {f.get('origin','?')} → {f.get('destination','?')} · {f.get('status','Scheduled')} · {count}/{f.get('capacity',180)} pax")
+    embed.add_field(name="Current flight board", value="\n".join(lines) or "No active flights.", inline=False)
+    alerts = []
+    for f in active:
+        if not f.get("aircraft"):
+            alerts.append(f"{f.get('flight_number')}: aircraft not assigned")
+        if not f.get("crew"):
+            alerts.append(f"{f.get('flight_number')}: crew not assigned")
+    embed.add_field(name="Operational checks", value="\n".join(alerts[:10]) or "No missing aircraft or crew assignments detected.", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="opsreport", description="Staff: view flight and passenger performance reports")
+async def opsreport(interaction: discord.Interaction):
+    if not _staff_only_here(interaction):
+        return await interaction.response.send_message("Staff server administrators or managers only.", ephemeral=True)
+    cfg = operations_data()
+    flights = list(cfg.get("flights", {}).values())
+    bookings = list(cfg.get("bookings", {}).values())
+    valid = [b for b in bookings if b.get("status") != "Cancelled"]
+    total = len(valid)
+    checked = sum(bool(b.get("checked_in")) for b in valid)
+    boarded = sum(bool(b.get("boarded")) for b in valid)
+    cancelled = sum(b.get("status") == "Cancelled" for b in bookings)
+    completed = sum(f.get("status") in ("Arrived", "Completed") for f in flights)
+    embed = discord.Embed(title="📊 Oman Air | Operations Report", color=discord.Color.from_rgb(0, 45, 90), timestamp=discord.utils.utcnow())
+    embed.add_field(name="Flight performance", value=f"Flights created: **{len(flights)}**\nCompleted: **{completed}**\nCancelled flights: **{sum(f.get('status') == 'Cancelled' for f in flights)}**\nDelayed: **{sum(f.get('status') == 'Delayed' for f in flights)}**", inline=True)
+    embed.add_field(name="Passenger performance", value=f"Active bookings: **{total}**\nCancelled bookings: **{cancelled}**\nCheck-in rate: **{(checked / total * 100):.1f}%**\nBoarding rate: **{(boarded / total * 100):.1f}%**", inline=True)
+    embed.add_field(name="Crew & fleet", value=f"Crew registered: **{len(cfg.get('crew', {}))}**\nAircraft registered: **{len(cfg.get('aircraft', {}))}**\nAvailable crew: **{sum(x.get('availability') == 'Available' for x in cfg.get('crew', {}).values())}**", inline=True)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="mybookings", description="Member: privately view your flight bookings")
+async def mybookings(interaction: discord.Interaction):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Use this command in the main server.", ephemeral=True)
+    cfg = operations_data()
+    own = [b for b in cfg.get("bookings", {}).values() if int(b.get("passenger_id", 0)) == interaction.user.id]
+    own.sort(key=lambda b: b.get("booked_at", ""), reverse=True)
+    lines = []
+    flights = cfg.get("flights", {})
+    for b in own[:15]:
+        f = flights.get(b.get("flight_number"), {})
+        state = b.get("status", "Booked")
+        lines.append(f"**{b.get('reference','—')}** · **{b.get('flight_number','—')}** · {state}\n{f.get('origin','?')} → {f.get('destination','?')} · {f.get('departure','TBA')}")
+    embed = discord.Embed(title="🎟️ Oman Air | My Bookings", description="\n\n".join(lines) or "You do not have any bookings yet.", color=discord.Color.from_rgb(0, 45, 90))
+    embed.set_footer(text="Use /cancelbooking with a reference to cancel an eligible booking.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="cancelbooking", description="Member: cancel your own flight booking")
+@app_commands.describe(reference="Your booking reference")
+async def cancelbooking(interaction: discord.Interaction, reference: str):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Use this command in the main server.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    booking = get_booking(cfg, reference)
+    if not booking or int(booking.get("passenger_id", 0)) != interaction.user.id:
+        return await interaction.response.send_message("That booking was not found in your account.", ephemeral=True)
+    if booking.get("status") == "Cancelled":
+        return await interaction.response.send_message("This booking is already cancelled.", ephemeral=True)
+    if booking.get("checked_in") or booking.get("boarded"):
+        return await interaction.response.send_message("A checked-in or boarded booking cannot be cancelled here. Please contact staff.", ephemeral=True)
+    flight = get_flight(cfg, booking.get("flight_number", ""))
+    if not flight or flight.get("status") in ("Departed", "Arrived", "Completed", "Cancelled"):
+        return await interaction.response.send_message("This flight is no longer eligible for self-service cancellation. Please contact staff.", ephemeral=True)
+    booking["status"] = "Cancelled"
+    booking["cancelled_at"] = discord.utils.utcnow().isoformat()
+    save_data(data)
+    await interaction.response.send_message(f"Booking **{booking.get('reference')}** for **{booking.get('flight_number')}** has been cancelled.", ephemeral=True)
+
+@crew_group.command(name="unassign", description="Remove a crew member from a flight")
+@app_commands.describe(member="Registered crew member", flight_number="Flight number")
+async def crew_unassign(interaction: discord.Interaction, member: discord.Member, flight_number: str):
+    if not await require_flight_staff(interaction):
+        return
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    flight_key = flight_number.strip().upper()
+    flight = cfg.get("flights", {}).get(flight_key)
+    record = cfg.get("crew", {}).get(str(member.id))
+    if not flight or not record:
+        return await interaction.response.send_message("Flight or crew record not found.", ephemeral=True)
+    assigned = flight.setdefault("crew", [])
+    if member.id not in assigned and str(member.id) not in assigned:
+        return await interaction.response.send_message("That crew member is not assigned to this flight.", ephemeral=True)
+    flight["crew"] = [x for x in assigned if str(x) != str(member.id)]
+    record["assigned_flights"] = [x for x in record.get("assigned_flights", []) if str(x).upper() != flight_key]
+    if not record["assigned_flights"] and record.get("availability") == "On Duty":
+        record["availability"] = "Available"
+    record["updated_at"] = discord.utils.utcnow().isoformat()
+    save_data(data)
+    await interaction.response.send_message(f"Removed {member.mention} from **{flight_key}**.", ephemeral=True)
+
+@crew_group.command(name="shift", description="Add a crew duty shift to the roster")
+@app_commands.describe(member="Crew member", start="Shift start date and time (include timezone)", end="Shift end date and time (include timezone)", assignment="Duty or shift notes")
+async def crew_shift(interaction: discord.Interaction, member: discord.Member, start: str, end: str, assignment: str):
+    if not await require_flight_staff(interaction):
+        return
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    record = cfg.setdefault("crew", {}).get(str(member.id))
+    if not record:
+        return await interaction.response.send_message("Register this crew member with /crew add first.", ephemeral=True)
+    if len(start) > 80 or len(end) > 80 or not assignment.strip() or len(assignment) > 120:
+        return await interaction.response.send_message("Provide a start, end and duty note (maximum 120 characters).", ephemeral=True)
+    shift = {"start": start.strip(), "end": end.strip(), "assignment": assignment.strip(), "created_by": interaction.user.id, "created_at": discord.utils.utcnow().isoformat()}
+    record.setdefault("shifts", []).append(shift)
+    record["shifts"] = record["shifts"][-30:]
+    save_data(data)
+    await interaction.response.send_message(f"Added a shift for {member.mention}: **{start} → {end}** · {assignment}", ephemeral=True)
+
+@crew_group.command(name="schedule", description="View crew duty shifts")
+@app_commands.describe(member="Crew member (optional; omit to view the roster schedule)")
+async def crew_schedule(interaction: discord.Interaction, member: discord.Member = None):
+    if not await require_flight_staff(interaction):
+        return
+    roster = load_data().get(str(STAFF_GUILD_ID), {}).get("crew", {})
+    records = [(int(k), v) for k, v in roster.items() if not member or int(k) == member.id]
+    lines = []
+    for member_id, rec in records:
+        for shift in rec.get("shifts", [])[-5:]:
+            lines.append(f"<@{member_id}> · **{shift.get('assignment','Duty')}**\n{shift.get('start','TBA')} → {shift.get('end','TBA')}")
+    embed = discord.Embed(title="🗓️ Oman Air | Crew Schedule", description="\n\n".join(lines[:20]) or "No shifts have been scheduled.", color=discord.Color.from_rgb(0, 45, 90))
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="flightnotify", description="Staff: send a flight status or gate notification to passengers")
+@app_commands.describe(flight_number="Flight number", message="Notification to send to booked passengers")
+async def flightnotify(interaction: discord.Interaction, flight_number: str, message: str):
+    if not _staff_only_here(interaction):
+        return await interaction.response.send_message("Staff server administrators or managers only.", ephemeral=True)
+    if not message.strip() or len(message) > 700:
+        return await interaction.response.send_message("Enter a notification between 1 and 700 characters.", ephemeral=True)
+    cfg = operations_data()
+    flight = get_flight(cfg, flight_number)
+    if not flight:
+        return await interaction.response.send_message("Flight not found.", ephemeral=True)
+    main_guild = bot.get_guild(MAIN_GUILD_ID)
+    if not main_guild:
+        return await interaction.response.send_message("The main server is unavailable.", ephemeral=True)
+    sent, failed = 0, 0
+    passenger_ids = {int(b.get("passenger_id", 0)) for b in cfg.get("bookings", {}).values()
+        if b.get("flight_number") == flight.get("flight_number") and b.get("status") != "Cancelled"}
+    embed = discord.Embed(title=f"✈️ Oman Air | Flight Update — {flight.get('flight_number')}",
+        description=f"**Route:** {flight.get('origin','?')} → {flight.get('destination','?')}\n**Status:** {flight.get('status','Scheduled')}\n**Gate:** {flight.get('gate','TBA')}\n\n{message.strip()}",
+        color=discord.Color.from_rgb(0, 45, 90), timestamp=discord.utils.utcnow())
+    for uid in passenger_ids:
+        member = main_guild.get_member(uid)
+        if not member:
+            try:
+                member = await main_guild.fetch_member(uid)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                failed += 1
+                continue
+        try:
+            await member.send(embed=embed)
+            sent += 1
+        except (discord.Forbidden, discord.HTTPException):
+            failed += 1
+    await interaction.response.send_message(f"Flight notification processed. Delivered: **{sent}** · Could not DM: **{failed}**.", ephemeral=True)
+
 # Persistent component views are registered at startup.
 async def setup_views():
     bot.add_view(RobloxVerificationPanel())
