@@ -2229,6 +2229,195 @@ async def flightnotify(interaction: discord.Interaction, flight_number: str, mes
             failed += 1
     await interaction.response.send_message(f"Flight notification processed. Delivered: **{sent}** · Could not DM: **{failed}**.", ephemeral=True)
 
+
+# ---------------- Fleet maintenance, seats, applications, training and boarding ----------------
+
+maintenance_group = app_commands.Group(name="maintenance", description="Aircraft maintenance and airworthiness records")
+bot.tree.add_command(maintenance_group)
+
+@maintenance_group.command(name="record", description="Staff: record an aircraft maintenance event")
+@app_commands.describe(registration="Aircraft registration", description="Work performed or defect reported", status="New operational status: Available, Maintenance, or Grounded")
+async def maintenance_record(interaction: discord.Interaction, registration: str, description: str, status: str = "Maintenance"):
+    if not await require_flight_staff(interaction):
+        return
+    status = status.strip().title()
+    if status not in ("Available", "Maintenance", "Grounded") or not description.strip() or len(description) > 700:
+        return await interaction.response.send_message("Use status Available, Maintenance or Grounded and a description up to 700 characters.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    key = registration.strip().upper()
+    aircraft = aircraft_store(cfg).get(key)
+    if not aircraft:
+        return await interaction.response.send_message("Aircraft registration not found.", ephemeral=True)
+    if status != "Available":
+        assigned = [f.get("flight_number") for f in cfg.get("flights", {}).values()
+                    if f.get("aircraft", "").strip().upper() == key
+                    and f.get("status") not in ("Cancelled", "Arrived", "Completed")]
+        if assigned:
+            return await interaction.response.send_message("Reassign or cancel these active flights before grounding this aircraft: " + ", ".join(assigned[:10]), ephemeral=True)
+    aircraft["status"] = status
+    aircraft.setdefault("maintenance_log", []).append({
+        "description": description.strip(), "status": status,
+        "recorded_by": interaction.user.id, "recorded_at": discord.utils.utcnow().isoformat()
+    })
+    aircraft["maintenance_log"] = aircraft["maintenance_log"][-50:]
+    save_data(data)
+    await interaction.response.send_message(f"Maintenance record saved for **{key}**. Fleet status: **{status}**.", ephemeral=True)
+
+@maintenance_group.command(name="history", description="Staff: view an aircraft maintenance history")
+async def maintenance_history(interaction: discord.Interaction, registration: str):
+    if not await require_flight_staff(interaction):
+        return
+    aircraft = aircraft_store(operations_data()).get(registration.strip().upper())
+    if not aircraft:
+        return await interaction.response.send_message("Aircraft registration not found.", ephemeral=True)
+    rows = aircraft.get("maintenance_log", [])[-10:][::-1]
+    embed = discord.Embed(title=f"🛠️ Maintenance History — {registration.strip().upper()}",
+        description="\n\n".join(f"**{x.get('status','—')}** · {x.get('recorded_at','')[:16]}\n{x.get('description','—')}" for x in rows) or "No maintenance entries recorded.",
+        color=discord.Color.orange())
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="seatselect", description="Member: select an available seat on your booking")
+@app_commands.describe(reference="Your booking reference", seat="Seat number, e.g. 12A")
+async def seatselect(interaction: discord.Interaction, reference: str, seat: str):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Use this command in the main server.", ephemeral=True)
+    seat = seat.strip().upper()
+    import re
+    if not re.fullmatch(r"[1-9][0-9]?[A-F]", seat):
+        return await interaction.response.send_message("Seat must be a valid row and letter, for example 12A (rows 1–99, seats A–F).", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    booking = get_booking(cfg, reference)
+    if not booking or int(booking.get("passenger_id", 0)) != interaction.user.id:
+        return await interaction.response.send_message("Booking reference not found in your account.", ephemeral=True)
+    if booking.get("status") == "Cancelled" or booking.get("boarded"):
+        return await interaction.response.send_message("Seat selection is unavailable for this booking.", ephemeral=True)
+    flight = get_flight(cfg, booking.get("flight_number", ""))
+    if not flight or flight.get("status") in ("Cancelled", "Departed", "Arrived", "Completed"):
+        return await interaction.response.send_message("Seat selection is closed for this flight.", ephemeral=True)
+    occupied = [b.get("seat") for b in cfg.get("bookings", {}).values()
+                if b.get("flight_number") == booking.get("flight_number")
+                and b.get("reference") != booking.get("reference")
+                and b.get("status") != "Cancelled"]
+    if seat in occupied:
+        return await interaction.response.send_message("That seat is already assigned. Please choose another.", ephemeral=True)
+    booking["seat"] = seat
+    booking["seat_selected_at"] = discord.utils.utcnow().isoformat()
+    save_data(data)
+    await interaction.response.send_message(f"Seat **{seat}** saved for booking **{booking['reference']}**.", ephemeral=True)
+
+@bot.tree.command(name="boardingstatus", description="Staff: view boarding progress for a flight")
+async def boardingstatus(interaction: discord.Interaction, flight_number: str):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this in the staff server.", ephemeral=True)
+    cfg = operations_data()
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Configured staff only.", ephemeral=True)
+    flight = get_flight(cfg, flight_number)
+    if not flight:
+        return await interaction.response.send_message("Flight not found.", ephemeral=True)
+    passengers = [b for b in cfg.get("bookings", {}).values() if b.get("flight_number") == flight.get("flight_number") and b.get("status") != "Cancelled"]
+    checked = sum(bool(b.get("checked_in")) for b in passengers)
+    boarded = sum(bool(b.get("boarded")) for b in passengers)
+    embed = discord.Embed(title=f"🛫 Boarding Progress — {flight.get('flight_number')}",
+        description=f"**Booked:** {len(passengers)}\n**Checked in:** {checked}\n**Boarded:** {boarded}\n**Awaiting check-in:** {len(passengers)-checked}\n**Awaiting boarding:** {checked-boarded}",
+        color=discord.Color.blue())
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="staffapply", description="Member: submit an application to join the virtual airline staff")
+@app_commands.describe(position="Role you are applying for", experience="Relevant experience and why you are suitable")
+async def staffapply(interaction: discord.Interaction, position: str, experience: str):
+    if not interaction.guild or interaction.guild.id != MAIN_GUILD_ID:
+        return await interaction.response.send_message("Apply from the main server.", ephemeral=True)
+    if not position.strip() or len(position) > 80 or len(experience.strip()) < 20 or len(experience) > 1200:
+        return await interaction.response.send_message("Enter a position (max 80 characters) and an explanation of 20–1,200 characters.", ephemeral=True)
+    data = load_data()
+    cfg = data.setdefault(str(STAFF_GUILD_ID), {})
+    apps = cfg.setdefault("staff_applications", {})
+    if any(int(x.get("member_id", 0)) == interaction.user.id and x.get("status") == "Pending" for x in apps.values()):
+        return await interaction.response.send_message("You already have a pending staff application.", ephemeral=True)
+    ref = "APP-" + uuid.uuid4().hex[:7].upper()
+    apps[ref] = {"member_id": interaction.user.id, "position": position.strip(), "experience": experience.strip(),
+                 "status": "Pending", "submitted_at": discord.utils.utcnow().isoformat()}
+    save_data(data)
+    staff_guild = bot.get_guild(STAFF_GUILD_ID)
+    if staff_guild:
+        try:
+            await staff_guild.owner.send(f"New Oman Air staff application **{ref}** from {interaction.user} for **{position.strip()}**. Review with /staffappreview.")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+    await interaction.response.send_message(f"Application **{ref}** submitted privately. Staff will review it.", ephemeral=True)
+
+@bot.tree.command(name="staffappreview", description="Staff: review and decide a staff application")
+@app_commands.describe(reference="Application reference", decision="Approve or reject", notes="Optional review notes")
+@app_commands.choices(decision=[app_commands.Choice(name="Approve", value="Approved"), app_commands.Choice(name="Reject", value="Rejected")])
+async def staffappreview(interaction: discord.Interaction, reference: str, decision: app_commands.Choice[str], notes: str = ""):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this in the staff server.", ephemeral=True)
+    cfg = operations_data()
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Configured staff only.", ephemeral=True)
+    data = load_data()
+    apps = data.setdefault(str(STAFF_GUILD_ID), {}).setdefault("staff_applications", {})
+    app = apps.get(reference.strip().upper())
+    if not app or app.get("status") != "Pending":
+        return await interaction.response.send_message("Pending application not found.", ephemeral=True)
+    app.update({"status": decision.value, "reviewed_by": interaction.user.id, "reviewed_at": discord.utils.utcnow().isoformat(), "review_notes": notes[:500]})
+    save_data(data)
+    main_guild = bot.get_guild(MAIN_GUILD_ID)
+    member = main_guild.get_member(int(app["member_id"])) if main_guild else None
+    if member:
+        try:
+            await member.send(f"Your Oman Air staff application **{reference}** has been **{decision.value.lower()}**." + (f"\nNotes: {notes[:500]}" if notes else ""))
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+    await interaction.response.send_message(f"Application **{reference}** marked **{decision.value}**.", ephemeral=True)
+
+@bot.tree.command(name="stafftraining", description="Staff: assign a training module to a member")
+@app_commands.describe(member="Trainee", module="Training module", instructions="What the trainee must complete")
+async def stafftraining(interaction: discord.Interaction, member: discord.Member, module: str, instructions: str):
+    if not interaction.guild or interaction.guild.id != STAFF_GUILD_ID or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this in the staff server.", ephemeral=True)
+    cfg = operations_data()
+    if not staff_member(interaction.user, cfg):
+        return await interaction.response.send_message("Configured staff only.", ephemeral=True)
+    if not module.strip() or len(module) > 100 or not instructions.strip() or len(instructions) > 800:
+        return await interaction.response.send_message("Provide a module (max 100 characters) and instructions (max 800).", ephemeral=True)
+    data = load_data()
+    records = data.setdefault(str(STAFF_GUILD_ID), {}).setdefault("training", {})
+    ref = "TRN-" + uuid.uuid4().hex[:7].upper()
+    records[ref] = {"member_id": member.id, "module": module.strip(), "instructions": instructions.strip(),
+                    "status": "Assigned", "assigned_by": interaction.user.id, "assigned_at": discord.utils.utcnow().isoformat()}
+    save_data(data)
+    try:
+        await member.send(f"Oman Air training assigned: **{module.strip()}** (reference {ref}).\n{instructions.strip()}")
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    await interaction.response.send_message(f"Training **{ref}** assigned to {member.mention}.", ephemeral=True)
+
+@bot.tree.command(name="trainingcomplete", description="Member: mark your assigned training as completed")
+@app_commands.describe(reference="Training reference")
+async def trainingcomplete(interaction: discord.Interaction, reference: str):
+    data = load_data()
+    records = data.setdefault(str(STAFF_GUILD_ID), {}).setdefault("training", {})
+    item = records.get(reference.strip().upper())
+    if not item or int(item.get("member_id", 0)) != interaction.user.id:
+        return await interaction.response.send_message("Training reference not found in your account.", ephemeral=True)
+    if item.get("status") == "Completed":
+        return await interaction.response.send_message("This training is already marked complete.", ephemeral=True)
+    item.update({"status": "Completed", "completed_at": discord.utils.utcnow().isoformat()})
+    save_data(data)
+    await interaction.response.send_message(f"Training **{reference.strip().upper()}** marked complete and sent for staff review.", ephemeral=True)
+
+@bot.tree.command(name="mytraining", description="Member: view your assigned training")
+async def mytraining(interaction: discord.Interaction):
+    records = load_data().get(str(STAFF_GUILD_ID), {}).get("training", {})
+    own = [x for x in records.values() if int(x.get("member_id", 0)) == interaction.user.id]
+    lines = [f"**{x.get('module')}** · {x.get('status')}\n{x.get('instructions','')[:250]}" for x in own[-10:][::-1]]
+    await interaction.response.send_message("\n\n".join(lines) or "No training assigned.", ephemeral=True)
+
+
 # Persistent component views are registered at startup.
 async def setup_views():
     bot.add_view(RobloxVerificationPanel())
